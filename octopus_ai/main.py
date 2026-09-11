@@ -48,56 +48,34 @@ from octopus_ai.interface.chat import ChatInterface
 import time
 
 
-def select_chrome_profile() -> tuple[Optional[str], str]:
+def prepare_main_profile() -> tuple[str, str]:
     """
-    Prompt user to select Chrome profile or read from environment.
-    Returns: (user_data_dir, profile_label)
+    Automatically set up and use the user's primary Chrome profile (Dhanush) without asking.
+    Syncs session tokens, WhatsApp IndexedDB, and Cookies into .chrome_profile so
+    all existing logins work seamlessly without crashing ChromeDriver.
     """
+    import shutil
     local_app_data = os.environ.get("LOCALAPPDATA", "")
-    personal_chrome = os.path.join(local_app_data, "Google", "Chrome", "User Data") if local_app_data else None
+    src = os.path.join(local_app_data, "Google", "Chrome", "User Data", "Default") if local_app_data else None
+    dst = os.path.abspath(os.path.join(os.path.dirname(__file__), ".chrome_profile", "Default"))
     
-    print("━" * 65)
-    print("👤 CHROME PROFILE SELECTION:")
-    print("  [1] Personal Chrome Profile (Use your existing Chrome logins)")
-    print(f"      Path: {personal_chrome if personal_chrome else 'Not found'}")
-    print("      ⚠️  Note: Close open Chrome windows first to prevent file locks.")
-    print("  [2] Dedicated Octopus Profile (Recommended - isolated & saved)")
-    print("      Path: .chrome_profile (Keeps logins, runs alongside normal Chrome)")
-    print("  [3] Guest / Temporary Profile (Fresh session each time)")
-    print("━" * 65)
+    if src and os.path.exists(src):
+        os.makedirs(dst, exist_ok=True)
+        # Sync session and login data into .chrome_profile
+        items_to_sync = ["Network", "IndexedDB", "Local Storage", "Preferences"]
+        for item in items_to_sync:
+            s = os.path.join(src, item)
+            d = os.path.join(dst, item)
+            if os.path.exists(s):
+                try:
+                    if os.path.isdir(s):
+                        shutil.copytree(s, d, dirs_exist_ok=True)
+                    else:
+                        shutil.copy2(s, d)
+                except Exception:
+                    pass
     
-    env_choice = os.getenv("CHROME_PROFILE_CHOICE")
-    choice = None
-    
-    if env_choice:
-        print(f"Using CHROME_PROFILE_CHOICE from env: {env_choice}")
-        choice = env_choice.strip()
-    elif sys.stdin and sys.stdin.isatty():
-        try:
-            choice = input("Select Chrome profile [1/2/3] (default: 2): ").strip()
-        except Exception:
-            choice = "2"
-    else:
-        # Non-interactive terminal fallback
-        choice = "2"
-        print("Non-interactive terminal detected. Defaulting to profile [2] (Dedicated).")
-        
-    if not choice:
-        choice = "2"
-        
-    if choice == "1":
-        if personal_chrome and os.path.exists(personal_chrome):
-            print("✓ Selected: Personal Chrome Profile")
-            return personal_chrome, "Personal Chrome Profile"
-        else:
-            print("⚠️ Personal Chrome directory not found. Falling back to Dedicated Profile (.chrome_profile).")
-            return ".chrome_profile", "Dedicated Octopus Profile"
-    elif choice == "3":
-        print("✓ Selected: Guest / Temporary Profile")
-        return None, "Guest / Temporary Profile"
-    else:
-        print("✓ Selected: Dedicated Octopus Profile (.chrome_profile)")
-        return ".chrome_profile", "Dedicated Octopus Profile"
+    return ".chrome_profile", "Main Profile (Dhanush)"
 
 
 async def main():
@@ -120,25 +98,26 @@ async def main():
     headless_env = os.getenv("BROWSER_HEADLESS", "false").lower()
     headless = headless_env in ("true", "1", "yes")
     
-    # Let user select Chrome profile
-    user_data_dir, profile_label = select_chrome_profile()
+    # Automatically prepare and use main profile (Dhanush) without prompting
+    user_data_dir, profile_label = prepare_main_profile()
     
-    print()
     print(f"✓ Configuration:")
     print(f"  • Headless: {headless}")
-    print(f"  • Chrome Profile: {profile_label} ({user_data_dir})")
+    print(f"  • Profile: {profile_label}")
     print(f"  • Groq Model: {os.getenv('GROQ_MODEL', 'qwen/qwen3.8-27b')}")
     print(f"  • Persona: Dhanush (Natural human text)")
     print()
     
-    # 1. Initialize Browser Engine
-    print("🚀 Launching Chrome browser...")
-    engine = BrowserEngine(headless=headless, user_data_dir=user_data_dir)
+    # 1. Initialize Browser Engine with Main Profile
+    print("🚀 Launching Chrome browser with Main Profile (Dhanush)...")
+    engine = BrowserEngine(
+        headless=headless, 
+        user_data_dir=user_data_dir,
+        profile_directory="Default"
+    )
     init_res = engine.initialize()
     if not init_res.get("success"):
         print(f"❌ Failed to initialize browser: {init_res.get('error')}")
-        if user_data_dir and "User Data" in user_data_dir:
-            print("👉 Tip: Your personal Chrome might be open. Please close all Chrome windows and retry, or select option [2].")
         return
     
     print("✓ Browser launched successfully!")

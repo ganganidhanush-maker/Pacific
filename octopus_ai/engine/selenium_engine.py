@@ -19,11 +19,18 @@ class BrowserEngine:
     low-level browser control for the tool layer.
     """
     
-    def __init__(self, headless: bool = False, chrome_path: Optional[str] = None, user_data_dir: Optional[str] = None):
+    def __init__(
+        self, 
+        headless: bool = False, 
+        chrome_path: Optional[str] = None, 
+        user_data_dir: Optional[str] = None,
+        profile_directory: Optional[str] = "Default"
+    ):
         self.driver: Optional[webdriver.Chrome] = None
         self.headless = headless
         self.chrome_path = chrome_path
         self.user_data_dir = user_data_dir
+        self.profile_directory = profile_directory
         self.is_initialized = False
     
     def initialize(self) -> Dict[str, Any]:
@@ -43,6 +50,16 @@ class BrowserEngine:
                 abs_profile = os.path.abspath(self.user_data_dir)
                 os.makedirs(abs_profile, exist_ok=True)
                 chrome_options.add_argument(f"--user-data-dir={abs_profile}")
+            
+            if self.profile_directory:
+                chrome_options.add_argument(f"--profile-directory={self.profile_directory}")
+            
+            # Disable profile picker and crash recovery prompts to prevent blocking
+            chrome_options.add_argument("--disable-profile-picker")
+            chrome_options.add_argument("--no-first-run")
+            chrome_options.add_argument("--no-default-browser-check")
+            chrome_options.add_argument("--disable-session-crashed-bubble")
+            chrome_options.add_argument("--hide-crash-restore-bubble")
             
             # Standard options for automation
             chrome_options.add_argument("--no-sandbox")
@@ -85,6 +102,13 @@ class BrowserEngine:
                     })
                 """
             })
+            
+            # Auto-click profile if Chrome opens profile-picker page
+            try:
+                if "profile-picker" in (self.driver.current_url or "").lower():
+                    self.auto_select_profile()
+            except Exception:
+                pass
             
             self.is_initialized = True
             
@@ -261,6 +285,46 @@ class BrowserEngine:
             }
         except Exception as e:
             return {"success": False, "error": str(e)}
+
+    def auto_select_profile(self) -> bool:
+        """
+        Auto-click the main profile card if Chrome shows the profile picker page.
+        """
+        if not self.is_ready():
+            return False
+        try:
+            # JavaScript to penetrate shadow DOM of profile-picker-app
+            script = """
+                const app = document.querySelector('profile-picker-app');
+                if (app && app.shadowRoot) {
+                    const mainView = app.shadowRoot.querySelector('profile-picker-main-view');
+                    if (mainView && mainView.shadowRoot) {
+                        const cards = mainView.shadowRoot.querySelectorAll('profile-card');
+                        for (let c of cards) {
+                            const nameEl = c.shadowRoot ? c.shadowRoot.querySelector('#profileName') : null;
+                            const nameText = nameEl ? nameEl.textContent : '';
+                            if (nameText.toLowerCase().includes('dhanush')) {
+                                c.click();
+                                return true;
+                            }
+                        }
+                        if (cards.length > 0) {
+                            cards[0].click();
+                            return true;
+                        }
+                    }
+                }
+                const regularCard = document.querySelector('.profile-card, profile-card');
+                if (regularCard) {
+                    regularCard.click();
+                    return true;
+                }
+                return false;
+            """
+            res = self.driver.execute_script(script)
+            return bool(res)
+        except Exception:
+            return False
 
     def quit(self) -> Dict[str, Any]:
         """Close the browser and quit the driver"""
