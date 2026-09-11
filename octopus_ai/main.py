@@ -249,7 +249,7 @@ async def main():
     except Exception as e:
         print(f"\n⚠️ Octopus Agent stopped: {e}")
     finally:
-        print("🧹 Cleaning up and closing browser...")
+        print("🛑 Closing browser and stopping driver processes...")
         engine.quit()
         print("✓ All done. Goodbye!")
 
