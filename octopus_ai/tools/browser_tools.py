@@ -533,6 +533,114 @@ class BrowserFindTool(BaseTool):
         }
 
 
+class BrowserOpenTabTool(BaseTool):
+    """Open a URL in a new tab"""
+    def __init__(self, driver=None):
+        self.driver = driver
+    
+    def execute(self, url: str, **kwargs) -> Dict[str, Any]:
+        if not self.driver:
+            return {"success": False, "error": "No browser driver available"}
+        try:
+            self.driver.execute_script("window.open(arguments[0], '_blank');", url)
+            new_handle = self.driver.window_handles[-1]
+            self.driver.switch_to.window(new_handle)
+            return {
+                "success": True,
+                "handle": new_handle,
+                "url": self.driver.current_url,
+                "title": self.driver.title,
+                "tab_count": len(self.driver.window_handles)
+            }
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def get_description(self) -> str:
+        return "Open a URL in a new browser tab and switch to it"
+
+    def get_parameters(self) -> Dict[str, Any]:
+        return {"url": {"type": "string", "required": True, "description": "URL to open in new tab"}}
+
+
+class BrowserSwitchTabTool(BaseTool):
+    """Switch to an open tab by index, handle, or title/URL substring"""
+    def __init__(self, driver=None):
+        self.driver = driver
+    
+    def execute(self, tab: Any = 0, **kwargs) -> Dict[str, Any]:
+        if not self.driver:
+            return {"success": False, "error": "No browser driver available"}
+        try:
+            handles = self.driver.window_handles
+            target = None
+            if isinstance(tab, int):
+                if 0 <= tab < len(handles):
+                    target = handles[tab]
+                else:
+                    return {"success": False, "error": f"Tab index {tab} out of range (0-{len(handles)-1})"}
+            elif isinstance(tab, str):
+                if tab in handles:
+                    target = tab
+                else:
+                    for h in handles:
+                        self.driver.switch_to.window(h)
+                        if tab.lower() in self.driver.current_url.lower() or tab.lower() in self.driver.title.lower():
+                            target = h
+                            break
+                    if not target:
+                        return {"success": False, "error": f"Tab matching '{tab}' not found"}
+            else:
+                return {"success": False, "error": f"Invalid tab identifier: {tab}"}
+            
+            self.driver.switch_to.window(target)
+            return {
+                "success": True,
+                "handle": target,
+                "url": self.driver.current_url,
+                "title": self.driver.title
+            }
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def get_description(self) -> str:
+        return "Switch to an open tab by index or name/url substring"
+
+    def get_parameters(self) -> Dict[str, Any]:
+        return {"tab": {"type": "any", "required": True, "description": "Tab index or keyword (e.g. 'whatsapp')"}}
+
+
+class BrowserGetTabsTool(BaseTool):
+    """Get list of open tabs"""
+    def __init__(self, driver=None):
+        self.driver = driver
+    
+    def execute(self, **kwargs) -> Dict[str, Any]:
+        if not self.driver:
+            return {"success": False, "error": "No browser driver available", "tabs": []}
+        try:
+            current = self.driver.current_window_handle
+            tabs_info = []
+            for idx, h in enumerate(self.driver.window_handles):
+                self.driver.switch_to.window(h)
+                tabs_info.append({
+                    "index": idx,
+                    "handle": h,
+                    "url": self.driver.current_url,
+                    "title": self.driver.title,
+                    "is_active": (h == current)
+                })
+            self.driver.switch_to.window(current)
+            return {"success": True, "tabs": tabs_info, "count": len(tabs_info)}
+        except Exception as e:
+            return {"success": False, "error": str(e), "tabs": []}
+
+    def get_description(self) -> str:
+        return "List all currently open browser tabs"
+
+    def get_parameters(self) -> Dict[str, Any]:
+        return {}
+
+
 class ToolRegistry:
     """Registry for all available browser tools"""
     
@@ -553,6 +661,9 @@ class ToolRegistry:
         self.register("browser.refresh", BrowserRefreshTool(self.driver))
         self.register("browser.screenshot", BrowserScreenshotTool(self.driver))
         self.register("browser.find", BrowserFindTool(self.driver))
+        self.register("browser.open_tab", BrowserOpenTabTool(self.driver))
+        self.register("browser.switch_tab", BrowserSwitchTabTool(self.driver))
+        self.register("browser.get_tabs", BrowserGetTabsTool(self.driver))
     
     def register(self, name: str, tool: BaseTool):
         """Register a tool"""
@@ -573,13 +684,83 @@ class ToolRegistry:
             for name, tool in self.tools.items()
         ]
     
-    def execute_tool(self, tool_name: str, **kwargs) -> Dict[str, Any]:
-        """Execute a tool by name"""
+    def execute_tool(self, tool_name: str, parameters: Optional[Dict[str, Any]] = None, **kwargs) -> Dict[str, Any]:
+        """Execute a tool by name with optional parameters dict or kwargs"""
         tool = self.get_tool(tool_name)
         if not tool:
             return {"success": False, "error": f"Tool not found: {tool_name}"}
         
-        return tool.execute(**kwargs)
+        params = dict(parameters or {})
+        params.update(kwargs)
+        return tool.execute(**params)
+
+
+class BrowserTools:
+    """
+    High-level interface for browser automation tools.
+    Wraps BrowserEngine and ToolRegistry, and provides execute_tool that
+    can be awaited or called synchronously.
+    """
+    
+    def __init__(self, engine=None, driver=None):
+        if engine is not None:
+            self.engine = engine
+        elif driver is not None:
+            from ..engine.selenium_engine import BrowserEngine
+            self.engine = BrowserEngine()
+            self.engine.driver = driver
+            self.engine.is_initialized = True
+        else:
+            from ..engine.selenium_engine import BrowserEngine
+            self.engine = BrowserEngine()
+        
+        driver_to_use = self.engine.get_driver() if hasattr(self.engine, "get_driver") else driver
+        self.registry = ToolRegistry(driver=driver_to_use)
+    
+    def set_driver(self, driver):
+        """Update driver for tools in registry"""
+        self.registry = ToolRegistry(driver=driver)
+        if hasattr(self.engine, "driver"):
+            self.engine.driver = driver
+            self.engine.is_initialized = driver is not None
+
+    def _normalize_params(self, tool_name: str, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Normalize parameters from LLM format to tool implementation format"""
+        normalized = dict(params)
+        
+        # Mapping for browser.type
+        if tool_name == "browser.type":
+            if "clear_first" in normalized and "clear" not in normalized:
+                normalized["clear"] = normalized.pop("clear_first")
+        
+        # Mapping for browser.wait
+        if tool_name == "browser.wait":
+            if "seconds" in normalized and "value" not in normalized:
+                normalized["condition"] = "seconds"
+                normalized["value"] = normalized.pop("seconds")
+
+        # Mapping for browser.read
+        if tool_name == "browser.read":
+            if "all_text" in normalized and normalized.get("all_text"):
+                normalized.pop("selector", None)
+
+        return normalized
+
+    async def execute_tool(self, tool_name: str, parameters: Optional[Dict[str, Any]] = None, **kwargs) -> Dict[str, Any]:
+        """Async execution of a tool"""
+        return self.execute_tool_sync(tool_name, parameters, **kwargs)
+
+    def execute_tool_sync(self, tool_name: str, parameters: Optional[Dict[str, Any]] = None, **kwargs) -> Dict[str, Any]:
+        """Synchronous execution of a tool"""
+        params = dict(parameters or {})
+        params.update(kwargs)
+        normalized = self._normalize_params(tool_name, params)
+        return self.registry.execute_tool(tool_name, **normalized)
+
+    def list_tools(self) -> List[Dict[str, Any]]:
+        """List all available tools"""
+        return self.registry.list_tools()
+
 
 
 # Example usage

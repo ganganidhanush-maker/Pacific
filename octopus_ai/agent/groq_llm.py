@@ -33,17 +33,20 @@ class GroqLLM:
             api_key: Groq API key (defaults to GROQ_API_KEY env var)
             model: Model name (defaults to GROQ_MODEL env var or llama-3.3-70b-versatile)
         """
-        self.api_key = api_key or os.getenv("GROQ_API_KEY")
-        self.model = model or os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
-        
-        if not self.api_key:
-            raise ValueError(
-                "Groq API key not found. Set GROQ_API_KEY environment variable "
-                "or pass api_key parameter."
-            )
-        
-        self.client = Groq(api_key=self.api_key)
+        self.api_key = api_key if api_key is not None else os.getenv("GROQ_API_KEY")
+        self.model = model or os.getenv("GROQ_MODEL", "qwen/qwen3.8-27b")
         self.conversation_history: List[Dict[str, str]] = []
+        
+        if self.api_key:
+            try:
+                self.client = Groq(api_key=self.api_key)
+                self.is_available = True
+            except Exception:
+                self.client = None
+                self.is_available = False
+        else:
+            self.client = None
+            self.is_available = False
         
     def _build_system_prompt(self, available_tools: List[Dict[str, Any]]) -> str:
         """
@@ -120,7 +123,8 @@ When you need to use a tool, respond with JSON in this format:
 Respond in JSON format for tool calls, or natural language for responses."""
 
     def chat(self, user_message: str, context: Optional[Dict[str, Any]] = None, 
-             available_tools: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+             available_tools: Optional[List[Dict[str, Any]]] = None,
+             system_prompt: Optional[str] = None) -> Dict[str, Any]:
         """
         Send a message to Groq LLM and get response.
         
@@ -128,17 +132,22 @@ Respond in JSON format for tool calls, or natural language for responses."""
             user_message: User's input message
             context: Additional context (current page, task state, etc.)
             available_tools: List of available tools
+            system_prompt: Optional custom system prompt (e.g. for human persona)
             
         Returns:
             Parsed response from LLM
         """
+        if not self.is_available or not self.client:
+            return self._rule_based_response(user_message, context)
+
         # Build conversation history
-        system_prompt = self._build_system_prompt(available_tools or [])
+        active_system_prompt = system_prompt or self._build_system_prompt(available_tools or [])
         
-        messages = [{"role": "system", "content": system_prompt}]
+        messages = [{"role": "system", "content": active_system_prompt}]
         
-        # Add conversation history
-        messages.extend(self.conversation_history[-10:])  # Last 10 messages
+        # Add conversation history only when using default agent prompt
+        if not system_prompt:
+            messages.extend(self.conversation_history[-10:])  # Last 10 messages
         
         # Add context if provided
         if context:
@@ -156,16 +165,17 @@ Respond in JSON format for tool calls, or natural language for responses."""
                 model=self.model,
                 messages=messages,
                 temperature=0.7,
-                max_tokens=2048,
+                max_tokens=1024,
                 top_p=1,
                 stream=False
             )
             
             assistant_message = response.choices[0].message.content
             
-            # Add to conversation history
-            self.conversation_history.append({"role": "user", "content": user_message})
-            self.conversation_history.append({"role": "assistant", "content": assistant_message})
+            # Add to conversation history if default mode
+            if not system_prompt:
+                self.conversation_history.append({"role": "user", "content": user_message})
+                self.conversation_history.append({"role": "assistant", "content": assistant_message})
             
             # Parse response
             return self._parse_response(assistant_message)
@@ -218,6 +228,80 @@ Respond in JSON format for tool calls, or natural language for responses."""
                 "action": "response",
                 "content": response_text
             }
+    
+    def _rule_based_response(self, user_message: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Provide intelligent rule-based fallback when Groq LLM API is unavailable."""
+        msg_lower = user_message.lower().strip()
+        context = context or {}
+        current_url = (context.get("current_url") or "").lower()
+
+        # Record conversation
+        self.conversation_history.append({"role": "user", "content": user_message})
+
+        if "whatsapp" in msg_lower:
+            if "web.whatsapp.com" in current_url:
+                resp = {"action": "response", "content": "Already on WhatsApp Web. Specify contact or message to send."}
+            else:
+                resp = {
+                    "action": "tool_call",
+                    "tool_name": "browser.open",
+                    "parameters": {"url": "https://web.whatsapp.com"}
+                }
+        elif "instagram" in msg_lower:
+            if "instagram.com" in current_url:
+                resp = {"action": "response", "content": "Already on Instagram. Specify profile or action."}
+            else:
+                resp = {
+                    "action": "tool_call",
+                    "tool_name": "browser.open",
+                    "parameters": {"url": "https://instagram.com"}
+                }
+        elif "canva" in msg_lower:
+            if "canva.com" in current_url:
+                resp = {"action": "response", "content": "Already on Canva. Specify design or template."}
+            else:
+                resp = {
+                    "action": "tool_call",
+                    "tool_name": "browser.open",
+                    "parameters": {"url": "https://canva.com"}
+                }
+        elif "google" in msg_lower or "search" in msg_lower:
+            resp = {
+                "action": "tool_call",
+                "tool_name": "browser.open",
+                "parameters": {"url": "https://www.google.com"}
+            }
+        elif "http://" in msg_lower or "https://" in msg_lower:
+            # Extract url
+            import re
+            urls = re.findall(r'https?://[^\s]+', user_message)
+            target_url = urls[0] if urls else "https://google.com"
+            resp = {
+                "action": "tool_call",
+                "tool_name": "browser.open",
+                "parameters": {"url": target_url}
+            }
+        elif msg_lower in ("screenshot", "take screenshot"):
+            resp = {
+                "action": "tool_call",
+                "tool_name": "browser.screenshot",
+                "parameters": {}
+            }
+        elif msg_lower in ("refresh", "reload"):
+            resp = {
+                "action": "tool_call",
+                "tool_name": "browser.refresh",
+                "parameters": {}
+            }
+        else:
+            resp = {
+                "action": "response",
+                "content": f"Understood: '{user_message}'. (Note: Running in rule-based fallback mode. Set GROQ_API_KEY for dynamic LLM reasoning.)"
+            }
+
+        reply_content = resp.get("content") or f"Executing tool: {resp.get('tool_name')}"
+        self.conversation_history.append({"role": "assistant", "content": reply_content})
+        return resp
     
     def clear_history(self):
         """Clear conversation history."""

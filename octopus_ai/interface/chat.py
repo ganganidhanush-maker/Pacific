@@ -5,6 +5,7 @@ Conversation interface for user interaction with Octopus.
 Initially a simple chat interface, expandable to voice later.
 """
 
+import asyncio
 from typing import Dict, Any, List, Optional, Callable
 
 
@@ -15,7 +16,8 @@ class ChatInterface:
     Handles user input and displays agent responses
     """
     
-    def __init__(self):
+    def __init__(self, agent: Optional[Any] = None):
+        self.agent = agent
         self.message_history: List[Dict[str, str]] = []
         self.on_message_callback: Optional[Callable[[str], str]] = None
     
@@ -27,9 +29,52 @@ class ChatInterface:
         """
         self.on_message_callback = callback
     
+    async def receive_user_message_async(self, message: str) -> Dict[str, Any]:
+        """
+        Receive and process a message asynchronously through agent or callback
+        """
+        self.message_history.append({
+            "role": "user",
+            "content": message
+        })
+        
+        try:
+            if self.agent and hasattr(self.agent, "process_request"):
+                agent_result = await self.agent.process_request(message)
+                response = agent_result.get("response") or agent_result.get("message", "Completed")
+            elif self.agent and hasattr(self.agent, "execute_task"):
+                agent_result = self.agent.execute_task(message)
+                response = agent_result.get("message") or agent_result.get("response", "Completed")
+            elif self.on_message_callback:
+                response = self.on_message_callback(message)
+            else:
+                response = "I'm not connected to an agent yet."
+            
+            self.message_history.append({
+                "role": "assistant",
+                "content": response
+            })
+            
+            return {
+                "success": True,
+                "response": response,
+                "history_length": len(self.message_history)
+            }
+        except Exception as e:
+            error_response = f"Error processing request: {str(e)}"
+            self.message_history.append({
+                "role": "assistant",
+                "content": error_response
+            })
+            return {
+                "success": False,
+                "error": str(e),
+                "response": error_response
+            }
+
     def receive_user_message(self, message: str) -> Dict[str, Any]:
         """
-        Receive a message from the user
+        Receive a message from the user (synchronous)
         
         Returns response dict with message and metadata
         """
@@ -39,39 +84,64 @@ class ChatInterface:
             "content": message
         })
         
-        # Process if handler is set
-        if self.on_message_callback:
-            try:
+        try:
+            if self.on_message_callback:
                 response = self.on_message_callback(message)
-                
-                # Store response in history
-                self.message_history.append({
-                    "role": "assistant",
-                    "content": response
-                })
-                
-                return {
-                    "success": True,
-                    "response": response,
-                    "history_length": len(self.message_history)
-                }
-            except Exception as e:
-                error_response = f"Error processing request: {str(e)}"
-                self.message_history.append({
-                    "role": "assistant",
-                    "content": error_response
-                })
+            elif self.agent and hasattr(self.agent, "execute_task"):
+                result = self.agent.execute_task(message)
+                response = result.get("message") or result.get("response", "Completed")
+            elif self.agent and hasattr(self.agent, "process_request"):
+                result = asyncio.run(self.agent.process_request(message))
+                response = result.get("response") or result.get("message", "Completed")
+            else:
                 return {
                     "success": False,
-                    "error": str(e),
-                    "response": error_response
+                    "error": "No message handler or agent configured",
+                    "response": "I'm not connected to an agent yet."
                 }
-        else:
+            
+            # Store response in history
+            self.message_history.append({
+                "role": "assistant",
+                "content": response
+            })
+            
+            return {
+                "success": True,
+                "response": response,
+                "history_length": len(self.message_history)
+            }
+        except Exception as e:
+            error_response = f"Error processing request: {str(e)}"
+            self.message_history.append({
+                "role": "assistant",
+                "content": error_response
+            })
             return {
                 "success": False,
-                "error": "No message handler configured",
-                "response": "I'm not connected to an agent yet."
+                "error": str(e),
+                "response": error_response
             }
+    
+    async def start(self) -> None:
+        """Start interactive CLI chat session with agent"""
+        print("\n🐙 Octopus Chat Session Started! (Type 'quit' or 'exit' to end)\n")
+        loop = asyncio.get_event_loop()
+        while True:
+            try:
+                user_msg = await loop.run_in_executor(None, input, "👤 You > ")
+                user_msg = user_msg.strip()
+                if not user_msg:
+                    continue
+                if user_msg.lower() in ("quit", "exit", "q"):
+                    print("\n🐙 Goodbye!")
+                    break
+                
+                result = await self.receive_user_message_async(user_msg)
+                print(f"🐙 Octopus: {result.get('response', '')}\n")
+            except (KeyboardInterrupt, EOFError):
+                print("\n🐙 Goodbye!")
+                break
     
     def get_history(self, limit: int = 20) -> List[Dict[str, str]]:
         """Get recent conversation history"""

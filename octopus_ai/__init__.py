@@ -45,6 +45,32 @@ The system follows this flow:
 """
 
 from .system import OctopusSystem, create_octopus
+from .agent.agent import OctopusAgent, automate
+from .agent.groq_llm import GroqLLM, get_platform_workflow, PLATFORM_WORKFLOWS
+from .agent.whatsapp_responder import WhatsAppAutoResponder
+from .tools.browser_tools import BrowserTools, ToolRegistry
+from .engine.selenium_engine import BrowserEngine
+from .memory.context import Memory
+from .safety.permissions import SafetyLayer, PermissionLevel, ActionCategory
+from .interface.chat import ChatInterface, WebChatInterface
 
-__all__ = ["OctopusSystem", "create_octopus"]
+__all__ = [
+    "OctopusSystem",
+    "create_octopus",
+    "OctopusAgent",
+    "automate",
+    "GroqLLM",
+    "get_platform_workflow",
+    "PLATFORM_WORKFLOWS",
+    "WhatsAppAutoResponder",
+    "BrowserTools",
+    "ToolRegistry",
+    "BrowserEngine",
+    "Memory",
+    "SafetyLayer",
+    "PermissionLevel",
+    "ActionCategory",
+    "ChatInterface",
+    "WebChatInterface",
+]
 __version__ = "0.1.0"

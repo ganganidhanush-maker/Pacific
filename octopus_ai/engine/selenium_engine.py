@@ -19,10 +19,18 @@ class BrowserEngine:
     low-level browser control for the tool layer.
     """
     
-    def __init__(self, headless: bool = False, chrome_path: Optional[str] = None):
+    def __init__(
+        self, 
+        headless: bool = False, 
+        chrome_path: Optional[str] = None, 
+        user_data_dir: Optional[str] = None,
+        profile_directory: Optional[str] = "Default"
+    ):
         self.driver: Optional[webdriver.Chrome] = None
         self.headless = headless
         self.chrome_path = chrome_path
+        self.user_data_dir = user_data_dir
+        self.profile_directory = profile_directory
         self.is_initialized = False
     
     def initialize(self) -> Dict[str, Any]:
@@ -35,7 +43,23 @@ class BrowserEngine:
             chrome_options = Options()
             
             if self.headless:
-                chrome_options.add_argument("--headless")
+                chrome_options.add_argument("--headless=new")
+            
+            if self.user_data_dir:
+                import os
+                abs_profile = os.path.abspath(self.user_data_dir)
+                os.makedirs(abs_profile, exist_ok=True)
+                chrome_options.add_argument(f"--user-data-dir={abs_profile}")
+            
+            if self.profile_directory:
+                chrome_options.add_argument(f"--profile-directory={self.profile_directory}")
+            
+            # Disable profile picker and crash recovery prompts to prevent blocking
+            chrome_options.add_argument("--disable-profile-picker")
+            chrome_options.add_argument("--no-first-run")
+            chrome_options.add_argument("--no-default-browser-check")
+            chrome_options.add_argument("--disable-session-crashed-bubble")
+            chrome_options.add_argument("--hide-crash-restore-bubble")
             
             # Standard options for automation
             chrome_options.add_argument("--no-sandbox")
@@ -60,7 +84,15 @@ class BrowserEngine:
                 service = Service(self.chrome_path)
                 self.driver = webdriver.Chrome(service=service, options=chrome_options)
             else:
-                self.driver = webdriver.Chrome(options=chrome_options)
+                try:
+                    self.driver = webdriver.Chrome(options=chrome_options)
+                except Exception:
+                    try:
+                        from webdriver_manager.chrome import ChromeDriverManager
+                        service = Service(ChromeDriverManager().install())
+                        self.driver = webdriver.Chrome(service=service, options=chrome_options)
+                    except Exception:
+                        raise
             
             # Execute CDP command to hide automation
             self.driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
@@ -70,6 +102,13 @@ class BrowserEngine:
                     })
                 """
             })
+            
+            # Auto-click profile if Chrome opens profile-picker page
+            try:
+                if "profile-picker" in (self.driver.current_url or "").lower():
+                    self.auto_select_profile()
+            except Exception:
+                pass
             
             self.is_initialized = True
             
@@ -93,6 +132,15 @@ class BrowserEngine:
     def is_ready(self) -> bool:
         """Check if browser is ready for automation"""
         return self.is_initialized and self.driver is not None
+
+    def get_current_url(self) -> Optional[str]:
+        """Get current URL if browser is ready, else None"""
+        if self.is_ready() and self.driver:
+            try:
+                return self.driver.current_url
+            except Exception:
+                return None
+        return None
     
     def navigate_to(self, url: str) -> Dict[str, Any]:
         """Navigate to a URL"""
@@ -136,6 +184,148 @@ class BrowserEngine:
         except Exception as e:
             return {"success": False, "error": str(e)}
     
+    def open_tab(self, url: str) -> Dict[str, Any]:
+        """Open a new tab with the given URL and switch to it"""
+        if not self.is_ready():
+            return {"success": False, "error": "Browser not initialized"}
+        
+        try:
+            self.driver.execute_script("window.open(arguments[0], '_blank');", url)
+            new_handle = self.driver.window_handles[-1]
+            self.driver.switch_to.window(new_handle)
+            return {
+                "success": True,
+                "handle": new_handle,
+                "url": self.driver.current_url,
+                "title": self.driver.title,
+                "tab_count": len(self.driver.window_handles)
+            }
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def switch_to_tab(self, identifier: Any) -> Dict[str, Any]:
+        """
+        Switch to a tab by index (int) or handle/URL keyword (str)
+        """
+        if not self.is_ready():
+            return {"success": False, "error": "Browser not initialized"}
+        
+        try:
+            handles = self.driver.window_handles
+            target = None
+            if isinstance(identifier, int):
+                if 0 <= identifier < len(handles):
+                    target = handles[identifier]
+                else:
+                    return {"success": False, "error": f"Tab index {identifier} out of range (0-{len(handles)-1})"}
+            elif isinstance(identifier, str):
+                if identifier in handles:
+                    target = identifier
+                else:
+                    # Match by URL or title substring
+                    for h in handles:
+                        self.driver.switch_to.window(h)
+                        if identifier.lower() in self.driver.current_url.lower() or identifier.lower() in self.driver.title.lower():
+                            target = h
+                            break
+                    if not target:
+                        return {"success": False, "error": f"Tab matching '{identifier}' not found"}
+            else:
+                return {"success": False, "error": f"Invalid tab identifier: {identifier}"}
+
+            self.driver.switch_to.window(target)
+            return {
+                "success": True,
+                "handle": target,
+                "url": self.driver.current_url,
+                "title": self.driver.title
+            }
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def get_tabs(self) -> Dict[str, Any]:
+        """List all open tabs with their handles, URLs, and titles"""
+        if not self.is_ready():
+            return {"success": False, "error": "Browser not initialized", "tabs": []}
+        
+        try:
+            current = self.driver.current_window_handle
+            tabs_info = []
+            for idx, h in enumerate(self.driver.window_handles):
+                self.driver.switch_to.window(h)
+                tabs_info.append({
+                    "index": idx,
+                    "handle": h,
+                    "url": self.driver.current_url,
+                    "title": self.driver.title,
+                    "is_active": (h == current)
+                })
+            self.driver.switch_to.window(current)
+            return {"success": True, "tabs": tabs_info, "count": len(tabs_info)}
+        except Exception as e:
+            return {"success": False, "error": str(e), "tabs": []}
+
+    def close_current_tab(self) -> Dict[str, Any]:
+        """Close current tab and switch to remaining active tab"""
+        if not self.is_ready():
+            return {"success": False, "error": "Browser not initialized"}
+        
+        try:
+            handles = self.driver.window_handles
+            if len(handles) <= 1:
+                return {"success": False, "error": "Cannot close the only open tab"}
+            
+            self.driver.close()
+            remaining = self.driver.window_handles
+            self.driver.switch_to.window(remaining[-1])
+            return {
+                "success": True,
+                "remaining_tabs": len(remaining),
+                "current_url": self.driver.current_url
+            }
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def auto_select_profile(self) -> bool:
+        """
+        Auto-click the main profile card if Chrome shows the profile picker page.
+        """
+        if not self.is_ready():
+            return False
+        try:
+            # JavaScript to penetrate shadow DOM of profile-picker-app
+            script = """
+                const app = document.querySelector('profile-picker-app');
+                if (app && app.shadowRoot) {
+                    const mainView = app.shadowRoot.querySelector('profile-picker-main-view');
+                    if (mainView && mainView.shadowRoot) {
+                        const cards = mainView.shadowRoot.querySelectorAll('profile-card');
+                        for (let c of cards) {
+                            const nameEl = c.shadowRoot ? c.shadowRoot.querySelector('#profileName') : null;
+                            const nameText = nameEl ? nameEl.textContent : '';
+                            if (nameText.toLowerCase().includes('dhanush')) {
+                                c.click();
+                                return true;
+                            }
+                        }
+                        if (cards.length > 0) {
+                            cards[0].click();
+                            return true;
+                        }
+                    }
+                }
+                const regularCard = document.querySelector('.profile-card, profile-card');
+                if (regularCard) {
+                    regularCard.click();
+                    return true;
+                }
+                return false;
+            """
+            res = self.driver.execute_script(script)
+            return bool(res)
+        except Exception:
+            return False
+
     def quit(self) -> Dict[str, Any]:
         """Close the browser and quit the driver"""
         if not self.is_ready():

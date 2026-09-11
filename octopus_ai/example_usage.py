@@ -4,6 +4,21 @@ Octopus AI - Example Usage
 This demonstrates the core architecture of Octopus as an agentic browser automation system.
 """
 
+import sys
+from pathlib import Path
+
+# Configure utf-8 encoding for Windows console
+if sys.stdout and hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
+# Ensure repository root is in sys.path
+repo_root = Path(__file__).resolve().parent.parent
+if str(repo_root) not in sys.path:
+    sys.path.insert(0, str(repo_root))
+
 from octopus_ai import OctopusSystem, create_octopus
 
 def demo_architecture():
