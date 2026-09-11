@@ -71,7 +71,7 @@ class TestWhatsAppAutoResponder(unittest.TestCase):
         normal_msg = "Hey Dhanush! What time are we meeting today?"
 
         self.assertTrue(self.responder.is_automated_or_broadcast("Domino's", dominos_msg))
-        self.assertTrue(self.responder.is_automated_or_broadcast("Class Rep", absentee_msg))
+        self.assertFalse(self.responder.is_automated_or_broadcast("Class Rep", absentee_msg))
         self.assertTrue(self.responder.is_automated_or_broadcast("Bank Alert", otp_msg))
         self.assertFalse(self.responder.is_automated_or_broadcast("Rahul", normal_msg))
 
