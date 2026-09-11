@@ -243,6 +243,20 @@ class BrowserEngine:
         except Exception as e:
             return {"success": False, "error": str(e)}
 
+    def get_current_handle(self) -> Optional[str]:
+        """Safely get the current window handle without raising an exception"""
+        if not self.is_ready():
+            return None
+        try:
+            return self.driver.current_window_handle
+        except Exception:
+            return None
+
+    def is_alive(self) -> bool:
+        """Check if the browser session is active and responsive"""
+        return self.get_current_handle() is not None
+
+
     def get_tabs(self) -> Dict[str, Any]:
         """List all open tabs with their handles, URLs, and titles"""
         if not self.is_ready():

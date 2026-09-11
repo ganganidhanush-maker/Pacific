@@ -48,6 +48,31 @@ from octopus_ai.interface.chat import ChatInterface
 import time
 
 
+def _safe_copy_tree(src: str, dst: str):
+    """Safely copy a file or directory tree, skipping locked files without aborting the rest."""
+    import shutil
+    if not os.path.exists(src):
+        return
+    if os.path.isdir(src):
+        os.makedirs(dst, exist_ok=True)
+        for root, dirs, files in os.walk(src):
+            rel_path = os.path.relpath(root, src)
+            dest_dir = os.path.join(dst, rel_path)
+            os.makedirs(dest_dir, exist_ok=True)
+            for file in files:
+                sf = os.path.join(root, file)
+                df = os.path.join(dest_dir, file)
+                try:
+                    shutil.copy2(sf, df)
+                except Exception:
+                    pass
+    else:
+        try:
+            shutil.copy2(src, dst)
+        except Exception:
+            pass
+
+
 def prepare_main_profile() -> tuple[str, str]:
     """
     Automatically prepare and use the user's primary Chrome profile (Dhanush).
@@ -55,7 +80,6 @@ def prepare_main_profile() -> tuple[str, str]:
     profiles and encryption keys so all sessions (WhatsApp, Instagram, Canva)
     load seamlessly without Chrome's default-directory DevTools restrictions or crashes.
     """
-    import shutil
     local_app_data = os.environ.get("LOCALAPPDATA", "")
     if not local_app_data:
         return ".chrome_profile", "Default Profile"
@@ -66,36 +90,42 @@ def prepare_main_profile() -> tuple[str, str]:
     if os.path.exists(src_root):
         os.makedirs(dst_root, exist_ok=True)
         
+        # Remove stale lock files from previous runs to prevent Chrome startup conflicts
+        for lock_name in ["SingletonLock", "SingletonCookie", "SingletonSocket", "lockfile"]:
+            lock_file = os.path.join(dst_root, lock_name)
+            if os.path.exists(lock_file):
+                try:
+                    os.remove(lock_file)
+                except Exception:
+                    pass
+
         # 1. Sync Local State (contains DPAPI encryption key and profile metadata)
         src_ls = os.path.join(src_root, "Local State")
         dst_ls = os.path.join(dst_root, "Local State")
-        if os.path.exists(src_ls):
-            try:
-                shutil.copy2(src_ls, dst_ls)
-            except Exception:
-                pass
+        _safe_copy_tree(src_ls, dst_ls)
         
         # 2. Sync Default profile (Dhanush)
         src_default = os.path.join(src_root, "Default")
         dst_default = os.path.join(dst_root, "Default")
         os.makedirs(dst_default, exist_ok=True)
         
-        items = ["Network", "IndexedDB", "Local Storage", "Preferences", "Secure Preferences"]
+        items = [
+            "Network", 
+            "IndexedDB", 
+            "Local Storage", 
+            "Session Storage", 
+            "Preferences", 
+            "Secure Preferences"
+        ]
         for item in items:
             s = os.path.join(src_default, item)
             d = os.path.join(dst_default, item)
-            if os.path.exists(s):
-                try:
-                    if os.path.isdir(s):
-                        shutil.copytree(s, d, dirs_exist_ok=True)
-                    else:
-                        shutil.copy2(s, d)
-                except Exception:
-                    pass
+            _safe_copy_tree(s, d)
         
         return dst_root, "Personal Chrome Profile (Dhanush)"
     
     return ".chrome_profile", "Default Profile"
+
 
 
 async def main():
@@ -149,10 +179,23 @@ async def main():
         
         # Tab 1: WhatsApp Web
         print("  1️⃣  Opening WhatsApp Web (https://web.whatsapp.com)...")
-        engine.navigate_to("https://web.whatsapp.com")
-        time.sleep(1.5)
-        whatsapp_handle = engine.driver.current_window_handle
+        nav_res = engine.navigate_to("https://web.whatsapp.com")
+        if not nav_res.get("success"):
+            print(f"  ⚠️  Initial WhatsApp navigation note: {nav_res.get('error')}")
+        time.sleep(2)
         
+        whatsapp_handle = engine.get_current_handle()
+        if not whatsapp_handle and engine.driver:
+            try:
+                handles = engine.driver.window_handles
+                whatsapp_handle = handles[0] if handles else None
+            except Exception:
+                whatsapp_handle = None
+        
+        if not whatsapp_handle:
+            print("❌ Unable to acquire WhatsApp window handle. Browser may have been closed.")
+            return
+
         # Tab 2: Instagram
         print("  2️⃣  Opening Instagram (https://instagram.com)...")
         engine.open_tab("https://instagram.com")
@@ -201,6 +244,8 @@ async def main():
         
     except (KeyboardInterrupt, asyncio.CancelledError):
         print("\n\n🛑 Stopping Octopus Agent...")
+    except Exception as e:
+        print(f"\n⚠️ Octopus Agent stopped: {e}")
     finally:
         print("🧹 Cleaning up and closing browser...")
         engine.quit()
