@@ -341,17 +341,22 @@ class BrowserEngine:
             return False
 
     def quit(self) -> Dict[str, Any]:
-        """Close the browser and quit the driver"""
-        if not self.is_ready():
-            return {"success": False, "error": "Browser not initialized"}
+        """Close the browser and quit the driver safely without connection spam"""
+        if not self.driver:
+            self.is_initialized = False
+            return {"success": True, "message": "Browser already closed"}
         
         try:
+            # Temporarily suppress urllib3 retry warnings while tearing down
+            import logging
+            logging.getLogger("urllib3.connectionpool").setLevel(logging.ERROR)
             self.driver.quit()
+        except Exception:
+            pass
+        finally:
             self.is_initialized = False
             self.driver = None
-            return {"success": True, "message": "Browser closed"}
-        except Exception as e:
-            return {"success": False, "error": str(e)}
+        return {"success": True, "message": "Browser closed"}
     
     def __enter__(self):
         """Context manager entry"""

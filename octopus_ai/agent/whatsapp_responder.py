@@ -107,7 +107,11 @@ class WhatsAppAutoResponder:
                 
                 time.sleep(2)
                 
-            except Exception:
+            except Exception as e:
+                err_str = str(e).lower()
+                if any(x in err_str for x in ["refused", "disconnected", "closed", "invalid session", "target machine", "connection reset"]):
+                    print("ℹ️ Browser was closed or disconnected during login wait.")
+                    return False
                 time.sleep(2)
         
         print("⚠️ WhatsApp Web login timeout. Please ensure you are logged in.")
@@ -689,6 +693,11 @@ class WhatsAppAutoResponder:
             except asyncio.CancelledError:
                 break
             except Exception as e:
+                err_str = str(e).lower()
+                if any(x in err_str for x in ["refused", "disconnected", "closed", "invalid session", "target machine", "connection reset"]):
+                    print("\nℹ️ Browser closed or disconnected. Exiting WhatsApp Auto-Responder.")
+                    self.is_running = False
+                    break
                 logger.error(f"Error in polling loop: {e}")
                 await asyncio.sleep(poll_interval)
         
