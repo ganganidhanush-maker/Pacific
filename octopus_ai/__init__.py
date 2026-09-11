@@ -47,6 +47,7 @@ The system follows this flow:
 from .system import OctopusSystem, create_octopus
 from .agent.agent import OctopusAgent, automate
 from .agent.groq_llm import GroqLLM, get_platform_workflow, PLATFORM_WORKFLOWS
+from .agent.whatsapp_responder import WhatsAppAutoResponder
 from .tools.browser_tools import BrowserTools, ToolRegistry
 from .engine.selenium_engine import BrowserEngine
 from .memory.context import Memory
@@ -61,6 +62,7 @@ __all__ = [
     "GroqLLM",
     "get_platform_workflow",
     "PLATFORM_WORKFLOWS",
+    "WhatsAppAutoResponder",
     "BrowserTools",
     "ToolRegistry",
     "BrowserEngine",

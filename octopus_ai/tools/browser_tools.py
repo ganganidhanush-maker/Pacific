@@ -533,6 +533,114 @@ class BrowserFindTool(BaseTool):
         }
 
 
+class BrowserOpenTabTool(BaseTool):
+    """Open a URL in a new tab"""
+    def __init__(self, driver=None):
+        self.driver = driver
+    
+    def execute(self, url: str, **kwargs) -> Dict[str, Any]:
+        if not self.driver:
+            return {"success": False, "error": "No browser driver available"}
+        try:
+            self.driver.execute_script("window.open(arguments[0], '_blank');", url)
+            new_handle = self.driver.window_handles[-1]
+            self.driver.switch_to.window(new_handle)
+            return {
+                "success": True,
+                "handle": new_handle,
+                "url": self.driver.current_url,
+                "title": self.driver.title,
+                "tab_count": len(self.driver.window_handles)
+            }
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def get_description(self) -> str:
+        return "Open a URL in a new browser tab and switch to it"
+
+    def get_parameters(self) -> Dict[str, Any]:
+        return {"url": {"type": "string", "required": True, "description": "URL to open in new tab"}}
+
+
+class BrowserSwitchTabTool(BaseTool):
+    """Switch to an open tab by index, handle, or title/URL substring"""
+    def __init__(self, driver=None):
+        self.driver = driver
+    
+    def execute(self, tab: Any = 0, **kwargs) -> Dict[str, Any]:
+        if not self.driver:
+            return {"success": False, "error": "No browser driver available"}
+        try:
+            handles = self.driver.window_handles
+            target = None
+            if isinstance(tab, int):
+                if 0 <= tab < len(handles):
+                    target = handles[tab]
+                else:
+                    return {"success": False, "error": f"Tab index {tab} out of range (0-{len(handles)-1})"}
+            elif isinstance(tab, str):
+                if tab in handles:
+                    target = tab
+                else:
+                    for h in handles:
+                        self.driver.switch_to.window(h)
+                        if tab.lower() in self.driver.current_url.lower() or tab.lower() in self.driver.title.lower():
+                            target = h
+                            break
+                    if not target:
+                        return {"success": False, "error": f"Tab matching '{tab}' not found"}
+            else:
+                return {"success": False, "error": f"Invalid tab identifier: {tab}"}
+            
+            self.driver.switch_to.window(target)
+            return {
+                "success": True,
+                "handle": target,
+                "url": self.driver.current_url,
+                "title": self.driver.title
+            }
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def get_description(self) -> str:
+        return "Switch to an open tab by index or name/url substring"
+
+    def get_parameters(self) -> Dict[str, Any]:
+        return {"tab": {"type": "any", "required": True, "description": "Tab index or keyword (e.g. 'whatsapp')"}}
+
+
+class BrowserGetTabsTool(BaseTool):
+    """Get list of open tabs"""
+    def __init__(self, driver=None):
+        self.driver = driver
+    
+    def execute(self, **kwargs) -> Dict[str, Any]:
+        if not self.driver:
+            return {"success": False, "error": "No browser driver available", "tabs": []}
+        try:
+            current = self.driver.current_window_handle
+            tabs_info = []
+            for idx, h in enumerate(self.driver.window_handles):
+                self.driver.switch_to.window(h)
+                tabs_info.append({
+                    "index": idx,
+                    "handle": h,
+                    "url": self.driver.current_url,
+                    "title": self.driver.title,
+                    "is_active": (h == current)
+                })
+            self.driver.switch_to.window(current)
+            return {"success": True, "tabs": tabs_info, "count": len(tabs_info)}
+        except Exception as e:
+            return {"success": False, "error": str(e), "tabs": []}
+
+    def get_description(self) -> str:
+        return "List all currently open browser tabs"
+
+    def get_parameters(self) -> Dict[str, Any]:
+        return {}
+
+
 class ToolRegistry:
     """Registry for all available browser tools"""
     
@@ -553,6 +661,9 @@ class ToolRegistry:
         self.register("browser.refresh", BrowserRefreshTool(self.driver))
         self.register("browser.screenshot", BrowserScreenshotTool(self.driver))
         self.register("browser.find", BrowserFindTool(self.driver))
+        self.register("browser.open_tab", BrowserOpenTabTool(self.driver))
+        self.register("browser.switch_tab", BrowserSwitchTabTool(self.driver))
+        self.register("browser.get_tabs", BrowserGetTabsTool(self.driver))
     
     def register(self, name: str, tool: BaseTool):
         """Register a tool"""

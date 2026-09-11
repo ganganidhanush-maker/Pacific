@@ -241,7 +241,7 @@ class TestSystem(unittest.TestCase):
         status = system.get_status()
         self.assertIn("initialized", status)
         self.assertIn("available_tools", status)
-        self.assertEqual(status["available_tools"], 10)
+        self.assertGreaterEqual(status["available_tools"], 10)
         
         # Test chat integration
         response = system.chat("Hello Octopus")

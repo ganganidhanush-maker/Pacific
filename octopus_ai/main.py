@@ -40,63 +40,109 @@ if str(repo_root) not in sys.path:
 # Load environment variables
 load_dotenv()
 
+from octopus_ai.engine.selenium_engine import BrowserEngine
+from octopus_ai.tools.browser_tools import BrowserTools
 from octopus_ai.agent.agent import OctopusAgent
+from octopus_ai.agent.whatsapp_responder import WhatsAppAutoResponder
 from octopus_ai.interface.chat import ChatInterface
+import time
 
 
 async def main():
     """Main entry point for Octopus AI Agent."""
     
-    print("=" * 60)
-    print("       OCTOPUS AI AGENT - Web Automation System")
-    print("=" * 60)
-    print()
-    print("Platforms supported:")
-    print("  • WhatsApp Web - Send messages, check chats")
-    print("  • Instagram - Follow, like, comment, DM")
-    print("  • Canva - Create presentations, designs")
-    print("  • Any website - General browsing automation")
-    print()
-    print("Example commands:")
-    print('  "Open WhatsApp and send Hi to Rahul"')
-    print('  "Go to Instagram and check my notifications"')
-    print('  "Create a presentation in Canva about AI"')
-    print()
-    print("Type 'quit' or 'exit' to stop the agent.")
-    print("=" * 60)
+    print("=" * 65)
+    print("       OCTOPUS AI AGENT - Web Automation & WhatsApp Bot")
+    print("=" * 65)
     print()
     
-    # Initialize agent with Groq API key from environment (or fallback mode)
     groq_api_key = os.getenv("GROQ_API_KEY")
-    
     if not groq_api_key:
         print("⚠️  NOTICE: GROQ_API_KEY not found in environment.")
         print("   Running in rule-based workflow mode.")
-        print("   Set GROQ_API_KEY in your environment for dynamic AI reasoning.")
+        print("   Set GROQ_API_KEY in your .env for dynamic AI reasoning.")
         print()
     else:
-        print(f"✓ Groq API key loaded")
+        print("✓ Groq API key loaded")
     
-    print(f"✓ Initializing Octopus Agent...")
+    headless_env = os.getenv("BROWSER_HEADLESS", "false").lower()
+    headless = headless_env in ("true", "1", "yes")
+    user_data_dir = os.getenv("CHROME_PROFILE_DIR", ".chrome_profile")
+    
+    print(f"✓ Configuration:")
+    print(f"  • Headless: {headless}")
+    print(f"  • Chrome Profile: {user_data_dir} (keeps sessions logged in)")
+    print(f"  • Groq Model: {os.getenv('GROQ_MODEL', 'qwen/qwen3.8-27b')}")
+    print()
+    
+    # 1. Initialize Browser Engine
+    print("🚀 Launching Chrome browser...")
+    engine = BrowserEngine(headless=headless, user_data_dir=user_data_dir)
+    init_res = engine.initialize()
+    if not init_res.get("success"):
+        print(f"❌ Failed to initialize browser: {init_res.get('error')}")
+        return
+    
+    print("✓ Browser launched successfully!")
+    print()
     
     try:
-        agent = OctopusAgent(groq_api_key=groq_api_key)
-        print(f"✓ Agent initialized successfully")
-        print(f"✓ Available platforms: {agent.get_status()['available_platforms']}")
+        # 2. Open all designated tabs
+        print("🌐 Opening designated tabs:")
+        
+        # Tab 1: WhatsApp Web
+        print("  1️⃣  Opening WhatsApp Web (https://web.whatsapp.com)...")
+        engine.navigate_to("https://web.whatsapp.com")
+        time.sleep(1.5)
+        
+        # Tab 2: Instagram
+        print("  2️⃣  Opening Instagram (https://instagram.com)...")
+        engine.open_tab("https://instagram.com")
+        time.sleep(1)
+        
+        # Tab 3: Canva
+        print("  3️⃣  Opening Canva (https://canva.com)...")
+        engine.open_tab("https://canva.com")
+        time.sleep(1)
+        
+        # 3. Switch back to WhatsApp Web (Tab 0)
+        print("  🎯 Switching focus back to WhatsApp Web tab...")
+        engine.switch_to_tab(0)
+        print("✓ All tabs opened and ready!\n")
+        
+        # 4. Initialize Tools, Agent, and WhatsApp Auto-Responder
+        tools = BrowserTools(engine=engine)
+        agent = OctopusAgent(browser_tools=tools, groq_api_key=groq_api_key)
+        
+        responder = WhatsAppAutoResponder(
+            driver=engine.get_driver(),
+            groq_llm=agent.llm,
+            memory=agent.memory
+        )
+        
+        # Check authentication status
+        print("=" * 65)
+        print("📲 WhatsApp Web Status:")
+        logged_in = responder.wait_for_login(timeout=45)
+        if not logged_in:
+            print("ℹ️ Note: If you need to scan the QR code, scan it in the open browser window.")
+            print("   The auto-responder will begin as soon as chats load.")
+        print("=" * 65)
         print()
+        print("🤖 Octopus WhatsApp Auto-Responder is ACTIVE!")
+        print("   • When an incoming message arrives, Octopus will auto-reply using Groq.")
+        print("   • Press Ctrl+C in this terminal anytime to stop.")
+        print("=" * 65 + "\n")
         
-        # Create chat interface
-        interface = ChatInterface(agent)
+        # 5. Start continuous listening loop
+        await responder.start_listening(poll_interval=2.0)
         
-        # Start interactive chat
-        await interface.start()
-        
-    except Exception as e:
-        print(f"\n✗ Error initializing agent: {e}")
-        print("\nTroubleshooting:")
-        print("1. Make sure GROQ_API_KEY is set correctly")
-        print("2. Check your internet connection")
-        print("3. Verify Docker container is running with proper permissions")
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        print("\n\n🛑 Stopping Octopus Agent...")
+    finally:
+        print("🧹 Cleaning up and closing browser...")
+        engine.quit()
+        print("✓ All done. Goodbye!")
 
 
 def run_demo():
