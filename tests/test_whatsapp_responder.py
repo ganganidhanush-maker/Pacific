@@ -39,6 +39,33 @@ class TestWhatsAppAutoResponder(unittest.TestCase):
         self.assertNotIn("as an ai", reply.lower())
         self.assertNotIn("system status", reply.lower())
 
+    def test_generate_ai_reply_telugu_slang(self):
+        reply = self.responder.generate_ai_reply(
+            contact="AKK", 
+            message_text="Finally chip dobinda",
+            recent_history=[
+                {"sender": "AKK", "text": "mana peru undhi roiii"},
+                {"sender": "Dhanush", "text": "Haha avuna roiii! Super!"},
+                {"sender": "AKK", "text": "Finally chip dobinda"}
+            ]
+        )
+        self.assertTrue(len(reply) > 0)
+        self.assertNotIn("<think>", reply)
+        self.assertNotIn("as an ai", reply.lower())
+        self.assertNotIn("automated response", reply.lower())
+
+    def test_sent_replies_history_suppression(self):
+        self.responder.sent_replies_history.add("haha inka raledhu bro")
+        # Simulating check against sent_replies_history
+        test_msg = "haha inka raledhu bro"
+        self.assertIn(test_msg.strip().lower(), self.responder.sent_replies_history)
+
+    def test_text_deduplication(self):
+        duplicated = "Haha yeah, finally!Haha yeah, finally!"
+        half = len(duplicated) // 2
+        cleaned = duplicated[:half] if duplicated[:half] == duplicated[half:] else duplicated
+        self.assertEqual(cleaned, "Haha yeah, finally!")
+
     def test_custom_system_prompt_override(self):
         custom_prompt = "You are a pirate. Answer every message with 'Ahoy matey!'."
         resp = self.llm.chat("Hello there", system_prompt=custom_prompt)

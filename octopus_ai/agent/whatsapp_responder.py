@@ -47,6 +47,7 @@ class WhatsAppAutoResponder:
         self.allow_group_replies = allow_group_replies
         self.user_name = user_name
         self.replied_fingerprints: Set[str] = set()
+        self.sent_replies_history: Set[str] = set()
         self.is_running = False
         self.is_authenticated = False
         self.whatsapp_handle: Optional[str] = None
@@ -272,12 +273,16 @@ class WhatsAppAutoResponder:
     def _inspect_conversation_js(self) -> Optional[Dict[str, Any]]:
         """
         Execute high-performance JavaScript to inspect active chat messages.
-        Accurately identifies if last message is outgoing or incoming, and extracts text.
+        Accurately identifies if last message is outgoing or incoming, extracts clean text,
+        and collects recent conversation history for LLM context.
         """
         if not self.driver:
             return None
         
         script = """
+            const activeContact = arguments[0] || "Friend";
+            const userName = arguments[1] || "Dhanush";
+            
             const result = (function() {
                 const mainPane = document.querySelector("#main") || document;
                 const rows = mainPane.querySelectorAll("div[data-id], div[class*='message-in'], div[class*='message-out'], div[role='row']");
@@ -285,6 +290,80 @@ class WhatsAppAutoResponder:
                     return null;
                 }
                 
+                // Helper to extract text from a row
+                function extractRowText(rowEl) {
+                    const textSelectors = [
+                        "span.selectable-text",
+                        "div.copyable-text span",
+                        "span._ao3e",
+                        "span[dir='ltr']",
+                        "span[dir='rtl']",
+                        "span[dir='auto']",
+                        "div.copyable-text"
+                    ];
+                    let raw = "";
+                    for (let sel of textSelectors) {
+                        const el = rowEl.querySelector(sel);
+                        if (el && el.textContent.trim()) {
+                            const meta = rowEl.querySelector("[data-testid='msg-meta'], span[data-testid='msg-time']");
+                            if (meta && el.contains(meta)) continue;
+                            raw = el.textContent.trim();
+                            break;
+                        }
+                    }
+                    if (!raw) {
+                        const meta = rowEl.querySelector("[data-testid='msg-meta'], span[data-testid='msg-time']");
+                        const metaText = meta ? meta.textContent : "";
+                        raw = rowEl.textContent.replace(metaText, "").trim();
+                    }
+                    
+                    // Deduplicate repeated text from WhatsApp Web accessibility mirrors
+                    if (raw.length > 4 && raw.length % 2 === 0) {
+                        const half = raw.length / 2;
+                        if (raw.substring(0, half) === raw.substring(half)) {
+                            raw = raw.substring(0, half);
+                        }
+                    }
+                    return raw;
+                }
+                
+                // 1. Build recent conversation context (last 6-8 valid messages)
+                const recentHistory = [];
+                const scanStart = Math.max(0, rows.length - 12);
+                for (let i = scanStart; i < rows.length; i++) {
+                    const row = rows[i];
+                    const cls = (row.className || "") + " " + (row.parentElement ? row.parentElement.className || "" : "");
+                    if (cls.includes("system-message") || row.querySelector("[data-testid='system-message']")) {
+                        continue;
+                    }
+                    
+                    const dataId = row.getAttribute("data-id") || (row.querySelector("[data-id]") ? row.querySelector("[data-id]").getAttribute("data-id") : "");
+                    const hasChecks = !!row.querySelector("[data-icon='msg-check'], [data-icon='msg-dblcheck'], [data-icon='msg-time'], [data-icon*='check'], [data-icon*='time']");
+                    const hasOutCls = cls.includes("message-out") || !!row.querySelector("[class*='message-out']");
+                    const isDataIdOut = dataId.startsWith("true_");
+                    
+                    const copyable = row.querySelector(".copyable-text, [data-pre-plain-text]");
+                    const prePlainText = copyable ? (copyable.getAttribute("data-pre-plain-text") || "") : "";
+                    const isPrePlainOut = prePlainText.includes("You:") || prePlainText.includes("You :") || prePlainText.toLowerCase().includes(userName.toLowerCase() + ":");
+                    
+                    const isOut = isDataIdOut || hasChecks || hasOutCls || isPrePlainOut;
+                    const rowText = extractRowText(row);
+                    
+                    if (rowText) {
+                        let senderName = isOut ? userName : activeContact;
+                        if (!isOut && prePlainText) {
+                            const match = prePlainText.match(/\\]\\s*([^:]+):/);
+                            if (match && match[1]) senderName = match[1].trim();
+                        }
+                        recentHistory.push({
+                            sender: senderName,
+                            text: rowText,
+                            is_outgoing: isOut
+                        });
+                    }
+                }
+                
+                // 2. Identify the status of the VERY LAST actual message row
                 let lastMsg = null;
                 let lastDataId = "";
                 let isOutgoing = false;
@@ -292,82 +371,70 @@ class WhatsAppAutoResponder:
                 
                 for (let i = rows.length - 1; i >= 0; i--) {
                     const row = rows[i];
-                    const dataId = row.getAttribute("data-id") || (row.querySelector("[data-id]") ? row.querySelector("[data-id]").getAttribute("data-id") : "");
                     const cls = (row.className || "") + " " + (row.parentElement ? row.parentElement.className || "" : "");
-                    
                     if (cls.includes("system-message") || row.querySelector("[data-testid='system-message']")) {
                         continue;
                     }
                     
-                    const hasChecks = !!row.querySelector("[data-icon='msg-check'], [data-icon='msg-dblcheck'], [data-icon='msg-time'], [data-icon*='check']");
+                    const dataId = row.getAttribute("data-id") || (row.querySelector("[data-id]") ? row.querySelector("[data-id]").getAttribute("data-id") : "");
+                    const hasChecks = !!row.querySelector("[data-icon='msg-check'], [data-icon='msg-dblcheck'], [data-icon='msg-time'], [data-icon*='check'], [data-icon*='time']");
                     const hasOutCls = cls.includes("message-out") || !!row.querySelector("[class*='message-out']");
                     const isDataIdOut = dataId.startsWith("true_");
                     
+                    const copyable = row.querySelector(".copyable-text, [data-pre-plain-text]");
+                    const prePlainText = copyable ? (copyable.getAttribute("data-pre-plain-text") || "") : "";
+                    const isPrePlainOut = prePlainText.includes("You:") || prePlainText.includes("You :") || prePlainText.toLowerCase().includes(userName.toLowerCase() + ":");
+                    
                     const hasInCls = cls.includes("message-in") || !!row.querySelector("[class*='message-in']");
                     const isDataIdIn = dataId.startsWith("false_");
+                    const isPrePlainIn = prePlainText.length > 0 && !isPrePlainOut;
                     
-                    if (isDataIdOut || hasChecks || hasOutCls) {
+                    // Outgoing check (Checkmarks, true_, message-out, or You in pre-plain-text)
+                    if (isDataIdOut || hasChecks || hasOutCls || isPrePlainOut) {
                         isOutgoing = true;
                         lastMsg = row;
                         lastDataId = dataId;
                         break;
-                    } else if (isDataIdIn || hasInCls) {
+                    }
+                    
+                    // Definite Incoming check (Must NOT have outgoing checkmarks)
+                    if ((isDataIdIn || hasInCls || isPrePlainIn) && !hasChecks) {
                         isIncoming = true;
                         lastMsg = row;
                         lastDataId = dataId;
                         break;
-                    } else {
-                        const tEl = row.querySelector(".selectable-text, .copyable-text, [dir='ltr'], [dir='rtl'], [dir='auto']");
-                        if (tEl && tEl.textContent.trim()) {
-                            lastMsg = row;
-                            lastDataId = dataId;
-                            isIncoming = true;
-                            break;
-                        }
                     }
-                }
-                
-                if (!lastMsg) return null;
-                if (isOutgoing) return { is_outgoing: true, is_incoming: false, data_id: lastDataId };
-                
-                const textSelectors = [
-                    "span.selectable-text",
-                    "div.copyable-text span",
-                    "span._ao3e",
-                    "span[dir='ltr']",
-                    "span[dir='rtl']",
-                    "span[dir='auto']",
-                    "div.copyable-text"
-                ];
-                
-                let text = "";
-                for (let sel of textSelectors) {
-                    const el = lastMsg.querySelector(sel);
-                    if (el && el.textContent.trim()) {
-                        const meta = lastMsg.querySelector("[data-testid='msg-meta'], span[data-testid='msg-time']");
-                        if (meta && el.contains(meta)) continue;
-                        text = el.textContent.trim();
+                    
+                    // Fallback for unclassified message: NEVER default to incoming!
+                    // Defaulting to outgoing prevents self-chatting infinite loops.
+                    const tEl = row.querySelector(".selectable-text, .copyable-text, [dir='ltr'], [dir='rtl'], [dir='auto']");
+                    if (tEl && tEl.textContent.trim()) {
+                        isOutgoing = true;
+                        lastMsg = row;
+                        lastDataId = dataId;
                         break;
                     }
                 }
                 
-                if (!text) {
-                    const meta = lastMsg.querySelector("[data-testid='msg-meta'], span[data-testid='msg-time']");
-                    const metaText = meta ? meta.textContent : "";
-                    text = lastMsg.textContent.replace(metaText, "").trim();
+                if (!lastMsg) return null;
+                if (isOutgoing) {
+                    return { is_outgoing: true, is_incoming: false, data_id: lastDataId, recent_history: recentHistory };
                 }
                 
+                const finalText = extractRowText(lastMsg);
                 return {
                     is_outgoing: false,
                     is_incoming: true,
                     data_id: lastDataId,
-                    text: text
+                    text: finalText,
+                    recent_history: recentHistory
                 };
             })();
             return result;
         """
         try:
-            return self.driver.execute_script(script)
+            contact = self.get_active_chat_title()
+            return self.driver.execute_script(script, contact, self.user_name)
         except Exception:
             return None
 
@@ -398,6 +465,24 @@ class WhatsAppAutoResponder:
                 if not text:
                     return None
                 
+                # WhatsApp Web text deduplication safeguard
+                if len(text) > 4 and len(text) % 2 == 0:
+                    half = len(text) // 2
+                    if text[:half] == text[half:]:
+                        text = text[:half]
+                
+                clean_text = text.strip().lower()
+                
+                # Self-chat prevention: Verify text does not match our own sent replies
+                if clean_text in self.sent_replies_history:
+                    logger.info(f"Ignoring message because it matches our own recently sent reply: '{text}'")
+                    return None
+                
+                for sent_msg in self.sent_replies_history:
+                    if len(sent_msg) >= 8 and (clean_text == sent_msg or clean_text.startswith(sent_msg) or sent_msg.startswith(clean_text)):
+                        logger.info(f"Ignoring message matching sent reply history prefix: '{text}'")
+                        return None
+                
                 # Fingerprint combining contact, text, and data_id
                 fingerprint = f"{contact}::{text}"
                 if data_id:
@@ -410,7 +495,8 @@ class WhatsAppAutoResponder:
                     "contact": contact,
                     "text": text,
                     "fingerprint": fingerprint,
-                    "data_id": data_id
+                    "data_id": data_id,
+                    "recent_history": js_res.get("recent_history", [])
                 }
             
             # 2. Fallback to DOM elements if JS inspection returned None
@@ -423,8 +509,33 @@ class WhatsAppAutoResponder:
             
             last_msg = msg_elems[-1]
             classes = (last_msg.get_attribute("class") or "").lower()
+            data_id = last_msg.get_attribute("data-id") or ""
             
-            if "message-out" in classes:
+            # Check checkmarks
+            has_checks = len(last_msg.find_elements(By.CSS_SELECTOR, "[data-icon='msg-check'], [data-icon='msg-dblcheck'], [data-icon='msg-time'], [data-icon*='check']")) > 0
+            
+            # Check data-pre-plain-text
+            copyable_elems = last_msg.find_elements(By.CSS_SELECTOR, ".copyable-text, [data-pre-plain-text]")
+            pre_text = ""
+            if copyable_elems:
+                pre_text = copyable_elems[0].get_attribute("data-pre-plain-text") or ""
+            
+            is_out = (
+                "message-out" in classes 
+                or data_id.startswith("true_") 
+                or has_checks 
+                or "you:" in pre_text.lower()
+                or self.user_name.lower() in pre_text.lower()
+            )
+            if is_out:
+                return None
+            
+            is_in = (
+                ("message-in" in classes or data_id.startswith("false_")) 
+                and not has_checks
+            )
+            if not is_in:
+                # Ambiguous: safety first, do not reply
                 return None
             
             text = ""
@@ -438,6 +549,17 @@ class WhatsAppAutoResponder:
             if not text:
                 return None
             
+            # Deduplicate text
+            if len(text) > 4 and len(text) % 2 == 0:
+                half = len(text) // 2
+                if text[:half] == text[half:]:
+                    text = text[:half]
+            
+            clean_text = text.strip().lower()
+            if clean_text in self.sent_replies_history:
+                logger.info(f"Ignoring message because it matches our own recently sent reply: '{text}'")
+                return None
+            
             fingerprint = f"{contact}::{text}"
             if fingerprint in self.replied_fingerprints:
                 return None
@@ -446,7 +568,8 @@ class WhatsAppAutoResponder:
                 "contact": contact,
                 "text": text,
                 "fingerprint": fingerprint,
-                "data_id": ""
+                "data_id": data_id,
+                "recent_history": []
             }
             
         except Exception as e:
@@ -485,24 +608,55 @@ class WhatsAppAutoResponder:
 
 
 
-    def generate_ai_reply(self, contact: str, message_text: str) -> str:
+    def generate_ai_reply(
+        self, 
+        contact: str, 
+        message_text: str, 
+        recent_history: Optional[List[Dict[str, Any]]] = None
+    ) -> str:
         """
         Use Groq LLM to generate a natural, human reply representing Dhanush.
+        Authentically matches the sender's slang and language (Telugu/Hinglish/English),
+        and responds directly to context in 3-10 words.
         """
         human_system_prompt = (
-            f"You are {self.user_name}. You are texting a contact on WhatsApp from your personal phone.\n"
-            "Write a single, natural, casual reply representing yourself.\n\n"
-            "STRICT RULES:\n"
-            "1. If the message is an automated promotional ad, marketing spam, OTP, bank alert, or broadcast announcement not meant for personal 1-on-1 human conversation, respond with ONLY the single word: IGNORE\n"
-            f"2. Speak naturally in first person as {self.user_name}.\n"
-            "3. Keep it brief: 1 short sentence or casual phrase (e.g. \"Hey! Yeah, give me a few minutes.\", \"Sure, sounds good!\", \"Haha cool, on it!\", \"Hey, what's up?\").\n"
-            "4. NEVER say you are an AI, a language model, an assistant, or a bot.\n"
-            "5. NEVER mention tasks, tools, systems, code, loops, or automation.\n"
-            "6. NEVER use bullet points, numbered lists, markdown formatting, or quotation marks.\n"
-            "7. Respond ONLY with the exact text message to be sent, or IGNORE. Nothing else."
+            f"You are {self.user_name}, a friendly, chill young Indian college student and developer chatting with friends on WhatsApp.\n"
+            "You are texting friends from your personal phone.\n\n"
+            "CRITICAL TONE & SLANG MATCHING RULES:\n"
+            "1. Always match the sender's language, dialect, and slang naturally:\n"
+            "   • If they text in Telugu / Telugu-English (e.g., 'mana peru undhi roiii', 'Finally chip dobinda', 'enti bro', 'avuna', 'inkenti', 'cheppu', 'ekkadunnav', 'ledu', 'chudu'):\n"
+            "     Reply naturally in authentic, casual Telugu/English mix (e.g., 'Haha avuna roiii! Super!', 'Haha ledu bro, inka raledhu', 'Haha anthe anthe!', 'Nuvvu cheppu enti sangathi', 'Chusa bro haha!', 'Ledu bro inka announce cheyaledhu').\n"
+            "   • If they text in Hindi / Hinglish (e.g., 'kya kar raha hai bro', 'scene kya hai', 'free hai kya', 'bhai sun'):\n"
+            "     Reply casually in Hinglish (e.g., 'Arre bas chill kar raha, tu bata', 'Haan bol bhai kya scene', 'Thoda busy hu abhi, 10 min me bolta hu').\n"
+            "   • If they text in English / casual college slang (e.g., 'are you free bro', 'did you push the code', 'check this out'):\n"
+            "     Reply in casual conversational Indian English (e.g., 'Yeah bro checking it now', 'Haha yeah finally done', 'Busy right now, ping you in a bit').\n"
+            "2. Length: Keep it ultra-realistic and brief: 3 to 10 words. Real people on WhatsApp never send long or formal paragraphs.\n"
+            "3. Directly answer or react to their message or question based on the conversation context. If they tease or joke, joke back casually.\n"
+            "4. If the message is an automated commercial promotion, OTP, bank alert, or broadcast announcement not meant for 1-on-1 human chatting, reply with ONLY the single word: IGNORE\n"
+            "5. ABSOLUTE PROHIBITIONS:\n"
+            "   • NEVER say you are an AI, a language model, an assistant, or a bot.\n"
+            "   • NEVER mention code, tasks, systems, tools, loops, or automation.\n"
+            "   • NEVER use corporate formalities ('Hope you are doing well', 'How may I help you', 'Dear').\n"
+            "   • NEVER use quotation marks, bullet points, markdown, or emoji spam (1 emoji max).\n"
+            "   • Respond with ONLY the exact text message to send. Nothing else."
         )
         
-        user_prompt = f"Incoming WhatsApp message from {contact}: \"{message_text}\""
+        history_lines = []
+        if recent_history:
+            for item in recent_history[-6:]:
+                sender = item.get("sender", "Friend")
+                txt = item.get("text", "")
+                if txt:
+                    history_lines.append(f"{sender}: {txt}")
+        
+        if history_lines:
+            conv_context = "\n".join(history_lines)
+            user_prompt = (
+                f"Recent conversation:\n{conv_context}\n\n"
+                f"Incoming message from {contact} to reply to: \"{message_text}\""
+            )
+        else:
+            user_prompt = f"Incoming WhatsApp message from {contact}: \"{message_text}\""
         
         try:
             resp = self.llm.chat(
@@ -537,16 +691,16 @@ class WhatsAppAutoResponder:
                 if clean_lines:
                     reply = clean_lines[0]
                 else:
-                    reply = "Hey! Got your message, will get back to you shortly."
+                    reply = "Hey! Will get back to you shortly."
             
             if not reply:
-                reply = "Hey! Got your message, will get back to you shortly."
+                reply = "Hey! Will get back to you shortly."
             
             return reply
             
         except Exception as e:
             logger.error(f"Error generating AI reply: {e}")
-            return "Hey! Got your message, I'll get back to you soon."
+            return "Hey! Will get back to you soon."
 
     def send_reply(self, reply_text: str) -> bool:
         """
@@ -672,6 +826,7 @@ class WhatsAppAutoResponder:
             contact = msg_info["contact"]
             incoming_text = msg_info["text"]
             fingerprint = msg_info["fingerprint"]
+            recent_history = msg_info.get("recent_history", [])
             
             # 3. Filter only obvious commercial marketing/OTP broadcasts
             if self.is_automated_or_broadcast(contact, incoming_text):
@@ -685,7 +840,7 @@ class WhatsAppAutoResponder:
             print(f"👤 Generating reply as {self.user_name} via Groq...")
             
             # 4. Generate AI reply
-            ai_reply = self.generate_ai_reply(contact, incoming_text)
+            ai_reply = self.generate_ai_reply(contact, incoming_text, recent_history=recent_history)
             
             if ai_reply == "IGNORE":
                 self.replied_fingerprints.add(fingerprint)
@@ -698,8 +853,11 @@ class WhatsAppAutoResponder:
             # 5. Send the reply
             sent = self.send_reply(ai_reply)
             
-            # ALWAYS record fingerprint to prevent repeated loops
+            # ALWAYS record fingerprint and sent reply history to prevent repeated loops
             self.replied_fingerprints.add(fingerprint)
+            self.sent_replies_history.add(ai_reply.strip().lower())
+            if len(self.sent_replies_history) > 100:
+                self.sent_replies_history.pop()
             
             if sent:
                 print("🚀 Reply sent successfully via WhatsApp Web!")
