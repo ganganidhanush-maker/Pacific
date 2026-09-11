@@ -1,189 +1,182 @@
-# Octopus AI Agent - Web Automation Architecture
+# Octopus AI Agent
 
-## Overview
+**AI-Powered Browser Automation System**
 
-Octopus is an **agentic browser automation system** where the AI Agent is the brain, not Selenium.
+Octopus is an intelligent web automation platform where the **AI Agent is the brain**, not Selenium. The agent understands natural language requests, plans tasks, calls browser automation tools, observes results, and adapts until the task is complete.
 
-```
-USER → AI AGENT → THINK/PLAN → CALL TOOL → SELENIUM → WEB PAGE → OBSERVE → AI AGENT → NEXT ACTION
-```
-
-## Core Philosophy
-
-- **AI Agent is the Brain**: Understands requests, plans tasks, makes decisions
-- **Selenium is the Hands**: Executes browser actions commanded by the agent
-- **Tool-based Architecture**: Agent calls tools, tools execute Selenium code
-- **Observation Loop**: Agent observes results and adapts until task completion
-
-## Architecture Diagram
+## Architecture
 
 ```
-                    ┌─────────────────────┐
-                    │        USER         │
-                    │   Talk to Octopus   │
-                    └──────────┬──────────┘
-                               │
-                               ▼
-                  ╔════════════════════════╗
-                  ║      OCTOPUS AI        ║
-                  ║         AGENT          ║
-                  ║                        ║
-                  ║  Understand → Plan     ║
-                  ║  Decide → Act          ║
-                  ║  Observe → Adapt       ║
-                  ╚═══════════╤════════════╝
-                              │
-                    ┌─────────┴─────────┐
-                    │                   │
-                    ▼                   ▼
-              ┌──────────┐        ┌──────────┐
-              │  MEMORY  │        │  SAFETY  │
-              └──────────┘        └──────────┘
-                    │                   │
-                    └─────────┬─────────┘
-                              ▼
-                    ┌─────────────────┐
-                    │   TOOL LAYER    │
-                    │                 │
-                    │ Open / Click    │
-                    │ Type / Read     │
-                    │ Scroll / Wait   │
-                    │ Screenshot      │
-                    └────────┬────────┘
-                             │
-                             ▼
-                    ┌─────────────────┐
-                    │ SELENIUM ENGINE │
-                    └────────┬────────┘
-                             │
-             ┌───────────────┼────────────────┐
-             ▼               ▼                ▼
-        ┌─────────┐     ┌──────────┐     ┌─────────┐
-        │WhatsApp │     │Instagram │     │  Canva  │
-        └─────────┘     └──────────┘     └─────────┘
-             │               │                │
-             └───────────────┼────────────────┘
-                             ▼
-                         WEB WORLD
-                             │
-                             ▼
-                      OBSERVE RESULT
-                             │
-                             └──────────► AI AGENT
+USER → AI AGENT (Brain) → TOOLS (Hands) → SELENIUM (Engine) → WEB → OBSERVE → AI AGENT
 ```
 
-## Six Major Modules
+### Key Components
 
-### 1. AI Agent (Brain)
-- Intent understanding
-- Reasoning & planning
-- Tool selection
-- Decision making
-- Completion detection
+1. **AI Agent** - Understands requests, plans tasks, makes decisions
+2. **Memory** - Maintains conversation history and context
+3. **Safety Layer** - Permission checks for dangerous actions
+4. **Tool Layer** - Browser automation commands (open, click, type, read, etc.)
+5. **Browser Engine** - Selenium WebDriver execution
+6. **Target Websites** - WhatsApp, Instagram, Canva, Google, etc.
 
-### 2. Conversation Interface (Mouth/Ears)
-- Chat UI for user interaction
-- Text input/output
-- Future: Voice support
+## Quick Start
 
-### 3. Tool Layer (Hands)
-- `browser.open(url)`
-- `browser.click(element)`
-- `browser.type(element, text)`
-- `browser.read()`
-- `browser.scroll(direction)`
-- `browser.wait(condition)`
-- `browser.back()`
-- `browser.refresh()`
-- `browser.screenshot()`
-- `browser.find(selector)`
+### Prerequisites
 
-### 4. Browser Engine (Physical Controller)
-- Selenium WebDriver (primary)
-- Playwright (optional future)
+- Docker and Docker Compose
+- Groq API key (get from https://console.groq.com)
 
-### 5. Memory (Context)
-- Conversation history
-- Current website/page
-- Current task state
-- Previous actions
-- Important variables/results
+### Setup
 
-### 6. Safety/Permission Layer (Control)
-- READ → automatic
-- SEARCH → automatic
-- CLICK → automatic
-- TYPE → automatic
-- SEND MESSAGE → optional confirmation
-- DELETE → confirmation required
-- PURCHASE → confirmation required
-- POST PUBLICLY → confirmation required
+1. Clone the repository:
+```bash
+git clone <repository-url>
+cd octopus_ai
+```
 
-## Example Workflow
+2. Create `.env` file with your Groq API key:
+```bash
+cp .env.example .env
+# Edit .env and add your GROQ_API_KEY
+```
 
-**User Request:**
-> "Open WhatsApp Web and reply to Rahul saying I'll call him after 6 PM."
+3. Run with Docker Compose:
+```bash
+docker-compose up --build
+```
 
-**Agent Process:**
+### Usage Examples
 
-1. **Understand Goal:**
-   - Platform: WhatsApp Web
-   - Contact: Rahul
-   - Message: "I'll call you after 6 PM."
+Once running, interact with Octopus via the chat interface:
 
-2. **Create Plan:**
-   ```
-   1. Open WhatsApp Web
-   2. Check authentication
-   3. Find Rahul
-   4. Open conversation
-   5. Locate message box
-   6. Type message
-   7. Send message
-   8. Verify delivery
-   ```
+**WhatsApp Automation:**
+```
+"Open WhatsApp Web and send 'Hello' to Rahul"
+```
 
-3. **Execute Tools:**
-   ```
-   browser.open("https://web.whatsapp.com")
-   browser.find_contact("Rahul")
-   browser.click(contact)
-   browser.type(message_box, "I'll call you after 6 PM.")
-   browser.send()
-   ```
+**Instagram Automation:**
+```
+"Go to Instagram and follow @username"
+```
 
-4. **Observe & Adapt:**
-   - Agent observes each step's result
-   - Adapts if errors occur
-   - Continues until task complete
+**Canva Automation:**
+```
+"Open Canva and create a new presentation"
+```
 
-## Key Differentiators
+**General Web Tasks:**
+```
+"Search Google for 'best restaurants near me'"
+"Go to example.com and click the login button"
+```
 
-1. **Not a Chatbot**: Does more than conversation - takes real actions
-2. **Not a Selenium Wrapper**: Selenium is just the execution layer
-3. **Agentic System**: Plans, decides, observes, adapts
-4. **Tool-based**: Clean separation between decision and execution
-5. **Memory-aware**: Maintains context across interactions
-6. **Safety-first**: Permission system for dangerous actions
+## Predefined Workflows
+
+### WhatsApp
+- Open WhatsApp Web
+- Check authentication status
+- Find contact by name
+- Open conversation
+- Type and send message
+- Verify delivery
+
+### Instagram
+- Open Instagram
+- Navigate to profile
+- Follow/unfollow users
+- Like posts
+- Read comments
+
+### Canva
+- Open Canva
+- Create new design
+- Select template
+- Add/edit elements
+- Export design
+
+## Configuration
+
+### Environment Variables
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `GROQ_API_KEY` | Your Groq API key | Required |
+| `GROQ_MODEL` | LLM model to use | `llama-3.1-70b-versatile` |
+| `BROWSER_HEADLESS` | Run browser without UI | `true` |
+| `BROWSER_WINDOW_SIZE` | Browser window dimensions | `1920,1080` |
+
+### Safety Permissions
+
+Configure permission levels for different action types:
+
+- `READ` - Automatic
+- `SEARCH` - Automatic
+- `CLICK` - Automatic
+- `TYPE` - Automatic
+- `SEND_MESSAGE` - Optional confirmation
+- `DELETE` - Confirmation required
+- `PURCHASE` - Confirmation required
+- `POST_PUBLICLY` - Confirmation required
 
 ## Project Structure
 
 ```
 octopus_ai/
-├── agent/          # AI Agent (brain)
-├── tools/          # Tool layer (hands)
-├── engine/         # Selenium engine
+├── agent/          # AI Agent logic
+│   ├── agent.py    # Main agent class
+│   └── groq_llm.py # Groq LLM integration
+├── tools/          # Browser automation tools
+│   └── browser_tools.py
+├── engine/         # Browser engine
+│   └── selenium_engine.py
 ├── memory/         # Context management
+│   └── context.py
 ├── safety/         # Permission system
-└── interface/      # User interface
+│   └── permissions.py
+├── interface/      # User interaction
+│   └── chat.py
+├── system.py       # Main system integration
+├── main.py         # Entry point
+├── Dockerfile      # Container configuration
+├── docker-compose.yml
+├── requirements.txt
+├── .env.example    # Environment template
+└── README.md
 ```
 
-## Getting Started
+## Development
 
-Focus on building the core agent-browser loop first:
-1. AI Agent that can understand simple requests
-2. Tool layer with basic browser operations
-3. Selenium integration
-4. Observation feedback loop
+### Run Without Docker
 
-Other features (documentation, research, avatars) come later.
+```bash
+pip install -r requirements.txt
+python main.py
+```
+
+### Demo Mode (No Browser)
+
+Test the AI reasoning without launching a browser:
+
+```bash
+python main.py --demo
+```
+
+## Features
+
+- ✅ Natural language understanding
+- ✅ Task planning and decomposition
+- ✅ Tool selection and execution
+- ✅ Result observation and adaptation
+- ✅ Conversation memory
+- ✅ Safety permissions
+- ✅ Multi-website support
+- ✅ Docker containerization
+- ✅ Persistent browser sessions
+
+## License
+
+MIT License
+
+## Contributing
+
+Contributions welcome! Please open an issue or submit a PR.
