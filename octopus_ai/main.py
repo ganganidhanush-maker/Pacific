@@ -75,40 +75,42 @@ def _safe_copy_tree(src: str, dst: str):
 
 def prepare_main_profile() -> tuple[str, str]:
     """
-    Automatically prepare and use the user's primary Chrome profile (Dhanush).
-    Uses a dedicated AutomationData directory that clones the user's real Chrome
-    profiles and encryption keys so all sessions (WhatsApp, Instagram, Canva)
-    load seamlessly without Chrome's default-directory DevTools restrictions or crashes.
+    Automatically prepare and use the user's dedicated automation Chrome profile.
+    Uses a dedicated AutomationData directory that retains all logins (WhatsApp, Instagram, Canva)
+    permanently across reruns without overwriting them or causing Chrome DevTools conflicts.
     """
     local_app_data = os.environ.get("LOCALAPPDATA", "")
     if not local_app_data:
         return ".chrome_profile", "Default Profile"
 
-    src_root = os.path.join(local_app_data, "Google", "Chrome", "User Data")
     dst_root = os.path.join(local_app_data, "Google", "Chrome", "AutomationData")
+    dst_default = os.path.join(dst_root, "Default")
     
-    if os.path.exists(src_root):
-        os.makedirs(dst_root, exist_ok=True)
-        
-        # Remove stale lock files from previous runs to prevent Chrome startup conflicts
-        for lock_name in ["SingletonLock", "SingletonCookie", "SingletonSocket", "lockfile"]:
+    # 1. If AutomationData already exists, DO NOT overwrite it!
+    # Overwriting IndexedDB or Network files wipes active WhatsApp sessions!
+    if os.path.exists(dst_default):
+        for lock_name in ["SingletonLock", "SingletonCookie", "SingletonSocket", "lockfile", "DevToolsActivePort"]:
             lock_file = os.path.join(dst_root, lock_name)
             if os.path.exists(lock_file):
                 try:
                     os.remove(lock_file)
                 except Exception:
                     pass
+        return dst_root, "Personal Chrome Profile (Dhanush)"
 
-        # 1. Sync Local State (contains DPAPI encryption key and profile metadata)
+    # 2. First-time initialization only (when AutomationData does not exist yet)
+    src_root = os.path.join(local_app_data, "Google", "Chrome", "User Data")
+    if os.path.exists(src_root):
+        os.makedirs(dst_root, exist_ok=True)
+        
+        # Sync Local State for DPAPI encryption key
         src_ls = os.path.join(src_root, "Local State")
         dst_ls = os.path.join(dst_root, "Local State")
         _safe_copy_tree(src_ls, dst_ls)
         
-        # 2. Sync Default profile (Dhanush)
+        # Initial seed of Default profile
         src_default = os.path.join(src_root, "Default")
-        dst_default = os.path.join(dst_root, "Default")
         os.makedirs(dst_default, exist_ok=True)
-        
         items = [
             "Network", 
             "IndexedDB", 
