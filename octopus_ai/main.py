@@ -48,6 +48,58 @@ from octopus_ai.interface.chat import ChatInterface
 import time
 
 
+def select_chrome_profile() -> tuple[Optional[str], str]:
+    """
+    Prompt user to select Chrome profile or read from environment.
+    Returns: (user_data_dir, profile_label)
+    """
+    local_app_data = os.environ.get("LOCALAPPDATA", "")
+    personal_chrome = os.path.join(local_app_data, "Google", "Chrome", "User Data") if local_app_data else None
+    
+    print("━" * 65)
+    print("👤 CHROME PROFILE SELECTION:")
+    print("  [1] Personal Chrome Profile (Use your existing Chrome logins)")
+    print(f"      Path: {personal_chrome if personal_chrome else 'Not found'}")
+    print("      ⚠️  Note: Close open Chrome windows first to prevent file locks.")
+    print("  [2] Dedicated Octopus Profile (Recommended - isolated & saved)")
+    print("      Path: .chrome_profile (Keeps logins, runs alongside normal Chrome)")
+    print("  [3] Guest / Temporary Profile (Fresh session each time)")
+    print("━" * 65)
+    
+    env_choice = os.getenv("CHROME_PROFILE_CHOICE")
+    choice = None
+    
+    if env_choice:
+        print(f"Using CHROME_PROFILE_CHOICE from env: {env_choice}")
+        choice = env_choice.strip()
+    elif sys.stdin and sys.stdin.isatty():
+        try:
+            choice = input("Select Chrome profile [1/2/3] (default: 2): ").strip()
+        except Exception:
+            choice = "2"
+    else:
+        # Non-interactive terminal fallback
+        choice = "2"
+        print("Non-interactive terminal detected. Defaulting to profile [2] (Dedicated).")
+        
+    if not choice:
+        choice = "2"
+        
+    if choice == "1":
+        if personal_chrome and os.path.exists(personal_chrome):
+            print("✓ Selected: Personal Chrome Profile")
+            return personal_chrome, "Personal Chrome Profile"
+        else:
+            print("⚠️ Personal Chrome directory not found. Falling back to Dedicated Profile (.chrome_profile).")
+            return ".chrome_profile", "Dedicated Octopus Profile"
+    elif choice == "3":
+        print("✓ Selected: Guest / Temporary Profile")
+        return None, "Guest / Temporary Profile"
+    else:
+        print("✓ Selected: Dedicated Octopus Profile (.chrome_profile)")
+        return ".chrome_profile", "Dedicated Octopus Profile"
+
+
 async def main():
     """Main entry point for Octopus AI Agent."""
     
@@ -67,12 +119,16 @@ async def main():
     
     headless_env = os.getenv("BROWSER_HEADLESS", "false").lower()
     headless = headless_env in ("true", "1", "yes")
-    user_data_dir = os.getenv("CHROME_PROFILE_DIR", ".chrome_profile")
     
+    # Let user select Chrome profile
+    user_data_dir, profile_label = select_chrome_profile()
+    
+    print()
     print(f"✓ Configuration:")
     print(f"  • Headless: {headless}")
-    print(f"  • Chrome Profile: {user_data_dir} (keeps sessions logged in)")
+    print(f"  • Chrome Profile: {profile_label} ({user_data_dir})")
     print(f"  • Groq Model: {os.getenv('GROQ_MODEL', 'qwen/qwen3.8-27b')}")
+    print(f"  • Persona: Dhanush (Natural human text)")
     print()
     
     # 1. Initialize Browser Engine
@@ -81,6 +137,8 @@ async def main():
     init_res = engine.initialize()
     if not init_res.get("success"):
         print(f"❌ Failed to initialize browser: {init_res.get('error')}")
+        if user_data_dir and "User Data" in user_data_dir:
+            print("👉 Tip: Your personal Chrome might be open. Please close all Chrome windows and retry, or select option [2].")
         return
     
     print("✓ Browser launched successfully!")
@@ -94,6 +152,7 @@ async def main():
         print("  1️⃣  Opening WhatsApp Web (https://web.whatsapp.com)...")
         engine.navigate_to("https://web.whatsapp.com")
         time.sleep(1.5)
+        whatsapp_handle = engine.driver.current_window_handle
         
         # Tab 2: Instagram
         print("  2️⃣  Opening Instagram (https://instagram.com)...")
@@ -105,9 +164,9 @@ async def main():
         engine.open_tab("https://canva.com")
         time.sleep(1)
         
-        # 3. Switch back to WhatsApp Web (Tab 0)
+        # 3. Switch back to WhatsApp Web tab
         print("  🎯 Switching focus back to WhatsApp Web tab...")
-        engine.switch_to_tab(0)
+        engine.switch_to_tab(whatsapp_handle)
         print("✓ All tabs opened and ready!\n")
         
         # 4. Initialize Tools, Agent, and WhatsApp Auto-Responder
@@ -117,8 +176,11 @@ async def main():
         responder = WhatsAppAutoResponder(
             driver=engine.get_driver(),
             groq_llm=agent.llm,
-            memory=agent.memory
+            memory=agent.memory,
+            allow_group_replies=False,
+            user_name="Dhanush"
         )
+        responder.set_whatsapp_handle(whatsapp_handle)
         
         # Check authentication status
         print("=" * 65)
@@ -130,12 +192,13 @@ async def main():
         print("=" * 65)
         print()
         print("🤖 Octopus WhatsApp Auto-Responder is ACTIVE!")
-        print("   • When an incoming message arrives, Octopus will auto-reply using Groq.")
+        print("   • When an incoming message arrives, Octopus will auto-reply representing Dhanush.")
+        print("   • If you are browsing Instagram or Canva, Octopus will auto-switch to WhatsApp and return you back!")
         print("   • Press Ctrl+C in this terminal anytime to stop.")
         print("=" * 65 + "\n")
         
-        # 5. Start continuous listening loop
-        await responder.start_listening(poll_interval=2.0)
+        # 5. Start continuous listening loop with cross-tab support
+        await responder.start_listening(poll_interval=2.5, whatsapp_handle=whatsapp_handle)
         
     except (KeyboardInterrupt, asyncio.CancelledError):
         print("\n\n🛑 Stopping Octopus Agent...")

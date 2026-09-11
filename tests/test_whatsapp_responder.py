@@ -34,6 +34,22 @@ class TestWhatsAppAutoResponder(unittest.TestCase):
         self.assertTrue(len(reply) > 0)
         self.assertNotIn("<think>", reply)
         self.assertNotIn("</think>", reply)
+        # Ensure no robotic meta-talk
+        self.assertNotIn("automated response", reply.lower())
+        self.assertNotIn("as an ai", reply.lower())
+        self.assertNotIn("system status", reply.lower())
+
+    def test_custom_system_prompt_override(self):
+        custom_prompt = "You are a pirate. Answer every message with 'Ahoy matey!'."
+        resp = self.llm.chat("Hello there", system_prompt=custom_prompt)
+        content = resp.get("content", "")
+        self.assertIn("Ahoy", content)
+
+    def test_responder_user_name_and_group_setting(self):
+        self.assertEqual(self.responder.user_name, "Dhanush")
+        self.assertFalse(self.responder.allow_group_replies)
+        self.responder.set_whatsapp_handle("handle_123")
+        self.assertEqual(self.responder.whatsapp_handle, "handle_123")
 
     def test_message_deduplication(self):
         fingerprint = "Rahul::Are you coming?"

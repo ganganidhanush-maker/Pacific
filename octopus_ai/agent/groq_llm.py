@@ -123,7 +123,8 @@ When you need to use a tool, respond with JSON in this format:
 Respond in JSON format for tool calls, or natural language for responses."""
 
     def chat(self, user_message: str, context: Optional[Dict[str, Any]] = None, 
-             available_tools: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+             available_tools: Optional[List[Dict[str, Any]]] = None,
+             system_prompt: Optional[str] = None) -> Dict[str, Any]:
         """
         Send a message to Groq LLM and get response.
         
@@ -131,6 +132,7 @@ Respond in JSON format for tool calls, or natural language for responses."""
             user_message: User's input message
             context: Additional context (current page, task state, etc.)
             available_tools: List of available tools
+            system_prompt: Optional custom system prompt (e.g. for human persona)
             
         Returns:
             Parsed response from LLM
@@ -139,12 +141,13 @@ Respond in JSON format for tool calls, or natural language for responses."""
             return self._rule_based_response(user_message, context)
 
         # Build conversation history
-        system_prompt = self._build_system_prompt(available_tools or [])
+        active_system_prompt = system_prompt or self._build_system_prompt(available_tools or [])
         
-        messages = [{"role": "system", "content": system_prompt}]
+        messages = [{"role": "system", "content": active_system_prompt}]
         
-        # Add conversation history
-        messages.extend(self.conversation_history[-10:])  # Last 10 messages
+        # Add conversation history only when using default agent prompt
+        if not system_prompt:
+            messages.extend(self.conversation_history[-10:])  # Last 10 messages
         
         # Add context if provided
         if context:
@@ -162,16 +165,17 @@ Respond in JSON format for tool calls, or natural language for responses."""
                 model=self.model,
                 messages=messages,
                 temperature=0.7,
-                max_tokens=2048,
+                max_tokens=1024,
                 top_p=1,
                 stream=False
             )
             
             assistant_message = response.choices[0].message.content
             
-            # Add to conversation history
-            self.conversation_history.append({"role": "user", "content": user_message})
-            self.conversation_history.append({"role": "assistant", "content": assistant_message})
+            # Add to conversation history if default mode
+            if not system_prompt:
+                self.conversation_history.append({"role": "user", "content": user_message})
+                self.conversation_history.append({"role": "assistant", "content": assistant_message})
             
             # Parse response
             return self._parse_response(assistant_message)
