@@ -129,6 +129,56 @@ class WhatsAppAutoResponder:
         except Exception:
             pass
 
+    def get_active_chat_title(self) -> str:
+        """Get the title/contact name of currently open chat"""
+        if not self.driver:
+            return "Unknown"
+        
+        try:
+            title = self.driver.execute_script("""
+                const header = document.querySelector("#main header") || document.querySelector("header");
+                if (!header) return null;
+                
+                const titleSpan = header.querySelector("span[title]");
+                if (titleSpan && titleSpan.title) {
+                    return titleSpan.title.trim();
+                }
+                
+                const spans = header.querySelectorAll("div[role='button'] span[dir='auto'], span[dir='auto']");
+                for (let s of spans) {
+                    const text = (s.textContent || "").trim();
+                    const low = text.toLowerCase();
+                    if (text && !low.startsWith("online") && !low.startsWith("typing") && !low.startsWith("last seen") && !low.startsWith("click here")) {
+                        return text;
+                    }
+                }
+                return null;
+            """)
+            if title:
+                return title
+        except Exception:
+            pass
+
+        header_selectors = [
+            "#main header span[title]",
+            "header span[title]",
+            "#main header div[role='button'] span[dir='auto']",
+            "header div[role='button'] span[dir='auto']",
+            "header span[dir='auto']",
+            "[data-testid='conversation-header'] span"
+        ]
+        
+        for sel in header_selectors:
+            try:
+                elems = self.driver.find_elements(By.CSS_SELECTOR, sel)
+                for el in elems:
+                    text = el.text.strip()
+                    if text and not any(text.lower().startswith(x) for x in ["online", "typing", "last seen", "click here"]):
+                        return text
+            except Exception:
+                continue
+        return "Unknown"
+
     def is_group_chat(self) -> bool:
         """Check if currently open conversation is a group chat"""
         if not self.driver:
