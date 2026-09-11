@@ -64,6 +64,17 @@ class TestWhatsAppAutoResponder(unittest.TestCase):
         self.assertIn("Hello", history[0]["content"])
         self.assertIn("Hi there", history[1]["content"])
 
+    def test_is_automated_or_broadcast_detection(self):
+        dominos_msg = "Account Alert\nDear Customer,\nYour wallet has been credited successfully.\n\nExpires in 3 days\n\nThanks for choosing Domino's!"
+        absentee_msg = "Good morning mam Today's (10-09-2026)absentees:- 6,19,31,34,38,53,55"
+        otp_msg = "Your OTP is 482910. Do not share this with anyone."
+        normal_msg = "Hey Dhanush! What time are we meeting today?"
+
+        self.assertTrue(self.responder.is_automated_or_broadcast("Domino's", dominos_msg))
+        self.assertTrue(self.responder.is_automated_or_broadcast("Class Rep", absentee_msg))
+        self.assertTrue(self.responder.is_automated_or_broadcast("Bank Alert", otp_msg))
+        self.assertFalse(self.responder.is_automated_or_broadcast("Rahul", normal_msg))
+
 
 class TestBrowserTabManagement(unittest.TestCase):
     """Test BrowserEngine multi-tab capabilities"""

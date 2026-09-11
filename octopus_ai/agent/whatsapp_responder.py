@@ -50,6 +50,7 @@ class WhatsAppAutoResponder:
         self.is_running = False
         self.is_authenticated = False
         self.whatsapp_handle: Optional[str] = None
+        self._current_chat_title: Optional[str] = None
     
     def set_driver(self, driver):
         """Set or update the WebDriver instance"""
@@ -136,51 +137,48 @@ class WhatsAppAutoResponder:
     def get_active_chat_title(self) -> str:
         """Get the title/contact name of currently open chat"""
         if not self.driver:
-            return "Unknown"
+            return self._current_chat_title or "Unknown"
         
         try:
             title = self.driver.execute_script("""
-                const header = document.querySelector("#main header") || document.querySelector("header");
-                if (!header) return null;
-                
-                const titleSpan = header.querySelector("span[title]");
-                if (titleSpan && titleSpan.title) {
-                    return titleSpan.title.trim();
-                }
-                
-                const spans = header.querySelectorAll("div[role='button'] span[dir='auto'], span[dir='auto']");
-                for (let s of spans) {
-                    const text = (s.textContent || "").trim();
-                    const low = text.toLowerCase();
-                    if (text && !low.startsWith("online") && !low.startsWith("typing") && !low.startsWith("last seen") && !low.startsWith("click here")) {
-                        return text;
+                // 1. Check header in #main
+                const mainHeader = document.querySelector("#main header") || document.querySelector("#main > header") || document.querySelector("[data-testid='conversation-header']");
+                if (mainHeader) {
+                    const spanTitle = mainHeader.querySelector("span[title]");
+                    if (spanTitle && spanTitle.title) return spanTitle.title.trim();
+                    if (spanTitle && spanTitle.textContent) return spanTitle.textContent.trim();
+                    
+                    const h2Span = mainHeader.querySelector("h2 span, [data-testid*='title'] span, div[role='button'] span[dir='auto']");
+                    if (h2Span && h2Span.textContent) {
+                        const t = h2Span.textContent.trim();
+                        const low = t.toLowerCase();
+                        if (t && !low.startsWith("online") && !low.startsWith("typing") && !low.startsWith("last seen") && !low.startsWith("click here")) {
+                            return t;
+                        }
                     }
                 }
+                
+                // 2. Check active conversation row in the sidebar
+                const activeSidebar = document.querySelector("#pane-side div[aria-selected='true'], #pane-side div._ak72");
+                if (activeSidebar) {
+                    const sTitle = activeSidebar.querySelector("span[title]") || activeSidebar.querySelector("span[dir='auto']");
+                    if (sTitle) {
+                        const t = (sTitle.title || sTitle.textContent || "").trim();
+                        if (t) return t;
+                    }
+                }
+                
                 return null;
             """)
             if title:
+                self._current_chat_title = title
                 return title
         except Exception:
             pass
 
-        header_selectors = [
-            "#main header span[title]",
-            "header span[title]",
-            "#main header div[role='button'] span[dir='auto']",
-            "header div[role='button'] span[dir='auto']",
-            "header span[dir='auto']",
-            "[data-testid='conversation-header'] span"
-        ]
-        
-        for sel in header_selectors:
-            try:
-                elems = self.driver.find_elements(By.CSS_SELECTOR, sel)
-                for el in elems:
-                    text = el.text.strip()
-                    if text and not any(text.lower().startswith(x) for x in ["online", "typing", "last seen", "click here"]):
-                        return text
-            except Exception:
-                continue
+        if self._current_chat_title:
+            return self._current_chat_title
+
         return "Unknown"
 
     def is_group_chat(self) -> bool:
@@ -219,9 +217,9 @@ class WhatsAppAutoResponder:
             return False
         
         try:
-            clicked = self.driver.execute_script("""
+            res = self.driver.execute_script("""
                 const pane = document.querySelector("#pane-side");
-                if (!pane) return false;
+                if (!pane) return null;
                 
                 const badges = pane.querySelectorAll(
                     "span[aria-label*='unread' i], [data-testid='icon-unread-count'], span[class*='_aou8'], div[aria-label*='unread' i]"
@@ -242,16 +240,23 @@ class WhatsAppAutoResponder:
                             }
                         }
                         if (row) {
+                            let contact = "";
+                            const tEl = row.querySelector("span[title]") || row.querySelector("div[role='gridcell'] span") || row.querySelector("span[dir='auto']");
+                            if (tEl) {
+                                contact = (tEl.title || tEl.textContent || "").trim();
+                            }
                             row.click();
-                            return true;
+                            return { clicked: true, contact: contact };
                         }
                     }
                 }
-                return false;
+                return null;
             """)
-            if clicked:
-                time.sleep(1.0)
-                logger.info("Opened unread chat via sidebar badge")
+            if res and res.get("clicked"):
+                if res.get("contact"):
+                    self._current_chat_title = res.get("contact")
+                time.sleep(1.2)
+                logger.info(f"Opened unread chat: {self._current_chat_title or 'contact'} via sidebar badge")
                 return True
         except Exception:
             pass
@@ -442,6 +447,82 @@ class WhatsAppAutoResponder:
             logger.debug(f"Error inspecting latest message: {e}")
             return None
 
+    def is_automated_or_broadcast(self, contact: str, message: str) -> bool:
+        """
+        Determine if a message is an automated broadcast, commercial alert, OTP, or announcement
+        that a human would NOT reply to.
+        """
+        contact_lower = contact.lower()
+        automated_contacts = [
+            "domino", "swiggy", "zomato", "uber", "ola", "amazon", "flipkart",
+            "bank", "hdfc", "sbi", "icici", "axis", "kotak", "paytm", "phonepe",
+            "otp", "alert", "service", "notification", "support", "broadcast",
+            "official", "update", "promo", "marketing"
+        ]
+        if any(ac in contact_lower for ac in automated_contacts):
+            return True
+            
+        msg_lower = message.lower()
+        automated_patterns = [
+            "dear customer", "dear user", "dear candidate", "dear student",
+            "credited successfully", "debited successfully", "account alert",
+            "wallet has been credited", "wallet has been debited",
+            "expires in", "valid till", "use code", "coupon code",
+            "thanks for choosing", "thank you for choosing",
+            "order confirmed", "order delivered", "out for delivery",
+            "otp is", "verification code", "one time password",
+            "do not share this", "never share your otp",
+            "absentees:-", "absentees:", "absent list", "absent report",
+            "attendance report", "today's absentees",
+            "click here to", "t&c apply", "terms and conditions apply",
+            "flat 50%", "flat 20%", "discount", "cashback",
+            "unsubscribe", "reply stop to"
+        ]
+        if any(pat in msg_lower for pat in automated_patterns):
+            return True
+            
+        return False
+
+    def is_read_only_or_announcement(self) -> bool:
+        """
+        Detect if the currently active chat does not accept replies
+        (e.g. read-only announcement channels, 'Only admins can send messages', or commercial broadcasts).
+        """
+        if not self.driver:
+            return False
+        
+        try:
+            return self.driver.execute_script("""
+                const main = document.querySelector("#main");
+                if (!main) return false;
+                
+                const text = (main.innerText || "").toLowerCase();
+                if (text.includes("only admins can send messages") ||
+                    text.includes("you can't send messages to this group") ||
+                    text.includes("you cannot reply to this business") ||
+                    text.includes("this chat is view only") ||
+                    text.includes("only community admins can send messages") ||
+                    text.includes("this business uses a cloud service to manage chats")) {
+                    return true;
+                }
+                
+                const footer = document.querySelector("#main footer") || document.querySelector("footer");
+                if (!footer) {
+                    return true;
+                }
+                
+                const input = footer.querySelector("div[contenteditable='true'], div[role='textbox'], div[data-testid='conversation-compose-box-input']");
+                if (!input) {
+                    const fText = (footer.innerText || "").toLowerCase();
+                    if (fText.includes("only admin") || fText.includes("cannot reply") || fText.includes("can't send")) {
+                        return true;
+                    }
+                }
+                
+                return false;
+            """)
+        except Exception:
+            return False
 
     def generate_ai_reply(self, contact: str, message_text: str) -> str:
         """
@@ -451,12 +532,13 @@ class WhatsAppAutoResponder:
             f"You are {self.user_name}. You are texting a contact on WhatsApp from your personal phone.\n"
             "Write a single, natural, casual reply representing yourself.\n\n"
             "STRICT RULES:\n"
-            f"1. Speak naturally in first person as {self.user_name}.\n"
-            "2. Keep it brief: 1 short sentence or casual phrase (e.g. \"Hey! Yeah, give me a few minutes.\", \"Sure, sounds good!\", \"Haha cool, on it!\", \"Hey, what's up?\").\n"
-            "3. NEVER say you are an AI, a language model, an assistant, or a bot.\n"
-            "4. NEVER mention tasks, tools, systems, code, loops, or automation.\n"
-            "5. NEVER use bullet points, numbered lists, markdown formatting, or quotation marks.\n"
-            "6. Respond ONLY with the exact text message to be sent. Nothing else."
+            "1. If the message is an automated promotional ad, marketing spam, OTP, bank alert, or broadcast announcement not meant for personal 1-on-1 human conversation, respond with ONLY the single word: IGNORE\n"
+            f"2. Speak naturally in first person as {self.user_name}.\n"
+            "3. Keep it brief: 1 short sentence or casual phrase (e.g. \"Hey! Yeah, give me a few minutes.\", \"Sure, sounds good!\", \"Haha cool, on it!\", \"Hey, what's up?\").\n"
+            "4. NEVER say you are an AI, a language model, an assistant, or a bot.\n"
+            "5. NEVER mention tasks, tools, systems, code, loops, or automation.\n"
+            "6. NEVER use bullet points, numbered lists, markdown formatting, or quotation marks.\n"
+            "7. Respond ONLY with the exact text message to be sent, or IGNORE. Nothing else."
         )
         
         user_prompt = f"Incoming WhatsApp message from {contact}: \"{message_text}\""
@@ -476,6 +558,9 @@ class WhatsAppAutoResponder:
                 reply = reply.split("</think>")[-1].strip()
             
             reply = reply.strip('"\n\r `*')
+            
+            if reply.strip().upper() == "IGNORE":
+                return "IGNORE"
             
             # Safeguard: remove any lines that look like AI disclaimers or lists
             lines = [line.strip() for line in reply.split("\n") if line.strip()]
@@ -506,63 +591,64 @@ class WhatsAppAutoResponder:
         """
         Locate the message input box in WhatsApp Web, type the reply, and send it.
         Uses React-native input event dispatching + execCommand + keyboard ENTER + send button.
+        Waits for up to 3 seconds if the input box is still mounting.
         """
         if not self.driver:
             return False
         
-        input_selectors = [
-            "#main footer div[contenteditable='true']",
-            "footer div[contenteditable='true']",
-            "div[data-testid='conversation-compose-box-input']",
-            "footer [role='textbox']",
-            "div[aria-label='Type a message']",
-            "footer [data-tab='10']"
-        ]
+        start_t = time.time()
+        input_ready = False
         
-        input_elem = None
-        for sel in input_selectors:
+        while time.time() - start_t < 3.0:
             try:
-                elems = self.driver.find_elements(By.CSS_SELECTOR, sel)
-                for el in elems:
-                    if el.is_displayed():
-                        input_elem = el
-                        break
-                if input_elem:
+                res = self.driver.execute_script("""
+                    const main = document.querySelector("#main");
+                    if (!main) return { status: "no_main" };
+                    
+                    const selectors = [
+                        "#main footer div[contenteditable='true']",
+                        "footer div[contenteditable='true']",
+                        "#main [contenteditable='true'][role='textbox']",
+                        "div[contenteditable='true'][role='textbox']",
+                        "#main div[data-testid='conversation-compose-box-input']",
+                        "div[data-testid='conversation-compose-box-input']",
+                        "#main [role='textbox']",
+                        "footer [role='textbox']",
+                        "div[aria-label*='Type a message' i]",
+                        "div[aria-placeholder*='Type a message' i]",
+                        "#main footer [data-tab]",
+                        "#main [contenteditable='true']"
+                    ];
+                    
+                    for (let s of selectors) {
+                        const el = document.querySelector(s);
+                        if (el) {
+                            el.focus();
+                            document.execCommand('selectAll', false, null);
+                            document.execCommand('insertText', false, arguments[0]);
+                            el.dispatchEvent(new InputEvent('input', { bubbles: true, cancelable: true, inputType: 'insertText', data: arguments[0] }));
+                            el.dispatchEvent(new Event('change', { bubbles: true }));
+                            return { status: "inserted" };
+                        }
+                    }
+                    
+                    return { status: "not_found" };
+                """, reply_text)
+                
+                if res and res.get("status") == "inserted":
+                    input_ready = True
                     break
             except Exception:
-                continue
+                pass
+            time.sleep(0.4)
         
-        if not input_elem:
+        if not input_ready:
             logger.warning("Could not locate WhatsApp message input box.")
             return False
         
         try:
-            input_elem.click()
-            time.sleep(0.2)
-            
-            # Inject text via JavaScript + dispatch React InputEvent
-            self.driver.execute_script("""
-                const el = arguments[0];
-                const text = arguments[1];
-                el.focus();
-                document.execCommand('selectAll', false, null);
-                document.execCommand('insertText', false, text);
-                el.dispatchEvent(new InputEvent('input', { bubbles: true, cancelable: true, inputType: 'insertText', data: text }));
-                el.dispatchEvent(new Event('change', { bubbles: true }));
-            """, input_elem, reply_text)
             time.sleep(0.3)
-            
-            # Fallback if execCommand didn't fill text
-            curr_val = input_elem.text.strip()
-            if not curr_val:
-                input_elem.send_keys(reply_text)
-                time.sleep(0.3)
-            
-            # Press Enter to send
-            input_elem.send_keys(Keys.ENTER)
-            time.sleep(0.5)
-            
-            # Click send button if still displayed or input still contains text
+            # Click send button if displayed or dispatch Enter key
             self.driver.execute_script("""
                 const footer = document.querySelector("#main footer") || document.querySelector("footer");
                 if (footer) {
@@ -571,11 +657,18 @@ class WhatsAppAutoResponder:
                     );
                     if (sendBtn) {
                         const btn = sendBtn.tagName.toLowerCase() === 'button' ? sendBtn : sendBtn.closest('button');
-                        if (btn) btn.click();
+                        if (btn) {
+                            btn.click();
+                            return;
+                        }
                     }
                 }
+                const active = document.activeElement;
+                if (active) {
+                    active.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
+                }
             """)
-            time.sleep(0.4)
+            time.sleep(0.5)
             return True
             
         except Exception as e:
@@ -632,19 +725,41 @@ class WhatsAppAutoResponder:
             incoming_text = msg_info["text"]
             fingerprint = msg_info["fingerprint"]
             
+            # 3. CRITICAL HUMAN FILTER: Ignore automated alerts, promotional messages, OTPs, absentees
+            if self.is_automated_or_broadcast(contact, incoming_text):
+                self.replied_fingerprints.add(fingerprint)
+                print(f"ℹ️ [Skipped] Message from \"{contact}\" is an automated broadcast/promotional alert. No reply needed.")
+                return None
+            
+            # 4. READ-ONLY CHECK: If the chat does not accept replies, skip it
+            if self.is_read_only_or_announcement():
+                self.replied_fingerprints.add(fingerprint)
+                print(f"ℹ️ [Read-Only] Chat \"{contact}\" does not accept replies (announcement/admin-only). Skipping.")
+                return None
+
             print("\n" + "─" * 60)
             print(f"📩 [New Message] from: {contact}")
             print(f"💬 Message: \"{incoming_text}\"")
             print(f"👤 Generating reply as {self.user_name} via Groq...")
             
-            # 3. Generate AI reply
+            # 5. Generate AI reply
             ai_reply = self.generate_ai_reply(contact, incoming_text)
+            
+            if ai_reply == "IGNORE":
+                self.replied_fingerprints.add(fingerprint)
+                print(f"ℹ️ [Ignored] Message flagged as broadcast/not requiring reply.")
+                print("─" * 60 + "\n")
+                return None
+                
             print(f"✨ Reply: \"{ai_reply}\"")
             
-            # 4. Send the reply
+            # 6. Send the reply
             sent = self.send_reply(ai_reply)
+            
+            # ALWAYS record fingerprint to prevent repeated loops
+            self.replied_fingerprints.add(fingerprint)
+            
             if sent:
-                self.replied_fingerprints.add(fingerprint)
                 print("🚀 Reply sent successfully via WhatsApp Web!")
                 
                 # Record in memory
