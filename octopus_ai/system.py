@@ -4,14 +4,41 @@ Octopus AI - Agentic Browser Automation System
 Main system integration module that brings together all components.
 """
 
+import sys
+from pathlib import Path
 from typing import Dict, Any, Optional
 
-from .agent.agent import OctopusAgent
-from .tools.browser_tools import ToolRegistry
-from .engine.selenium_engine import BrowserEngine
-from .memory.context import Memory
-from .safety.permissions import SafetyLayer
-from .interface.chat import ChatInterface
+# Configure utf-8 encoding for Windows console
+if sys.stdout and hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+if sys.stderr and hasattr(sys.stderr, "reconfigure"):
+    try:
+        sys.stderr.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
+# Ensure repository root is in sys.path
+repo_root = Path(__file__).resolve().parent.parent
+if str(repo_root) not in sys.path:
+    sys.path.insert(0, str(repo_root))
+
+try:
+    from .agent.agent import OctopusAgent
+    from .tools.browser_tools import ToolRegistry, BrowserTools
+    from .engine.selenium_engine import BrowserEngine
+    from .memory.context import Memory
+    from .safety.permissions import SafetyLayer
+    from .interface.chat import ChatInterface
+except ImportError:
+    from octopus_ai.agent.agent import OctopusAgent
+    from octopus_ai.tools.browser_tools import ToolRegistry, BrowserTools
+    from octopus_ai.engine.selenium_engine import BrowserEngine
+    from octopus_ai.memory.context import Memory
+    from octopus_ai.safety.permissions import SafetyLayer
+    from octopus_ai.interface.chat import ChatInterface
 
 
 class OctopusSystem:
@@ -44,7 +71,7 @@ class OctopusSystem:
         
         # Initialize agent with dependencies
         self.agent = OctopusAgent(
-            llm_client=None,  # TODO: Add LLM client
+            browser_tools=self.tools,
             memory=self.memory,
             safety_layer=self.safety
         )
@@ -61,23 +88,16 @@ class OctopusSystem:
         
         This is the main entry point for user requests
         """
-        # Store conversation
-        self.memory.add_conversation("user", message)
-        
-        if not self.is_initialized:
-            return "Browser engine not initialized. Cannot execute commands."
-        
-        # Execute task through agent
+        # Execute task through agent (agent records conversation in memory)
         result = self.agent.execute_task(message)
         
-        # Store response
+        # Format response
         if result.get("success"):
-            response = f"✅ Task completed: {result.get('message')}"
+            response = f"✅ Task completed: {result.get('message') or result.get('response', 'Done')}"
         else:
-            response = f"❌ Task failed: {result.get('message')}"
+            response = f"❌ Task failed: {result.get('message') or result.get('response', 'Failed')}"
         
         self.memory.add_conversation("assistant", response)
-        
         return response
     
     def chat(self, message: str) -> str:

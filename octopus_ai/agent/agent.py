@@ -10,6 +10,7 @@ This is the central intelligence module that:
 - Handles errors and adapts plans
 """
 
+import asyncio
 import logging
 from typing import Dict, List, Any, Optional
 from datetime import datetime
@@ -30,22 +31,41 @@ class OctopusAgent:
     using Groq LLM for intelligence.
     """
     
-    def __init__(self, memory: Optional[Memory] = None, 
-                 browser_tools: Optional[BrowserTools] = None,
-                 groq_api_key: Optional[str] = None):
+    def __init__(
+        self,
+        memory: Optional[Memory] = None, 
+        browser_tools: Optional[Any] = None,
+        groq_api_key: Optional[str] = None,
+        safety_layer: Optional[Any] = None,
+        llm_client: Optional[Any] = None,
+        **kwargs
+    ):
         """
         Initialize the Octopus Agent.
         
         Args:
             memory: Memory instance for context (creates new if None)
-            browser_tools: BrowserTools instance (creates new if None)
+            browser_tools: BrowserTools or ToolRegistry instance (creates new if None)
             groq_api_key: Groq API key (uses env var if None)
+            safety_layer: SafetyLayer instance for permission enforcement
+            llm_client: Optional custom LLM client
         """
         self.memory = memory or Memory()
-        self.browser_tools = browser_tools or BrowserTools()
         
-        # Initialize Groq LLM
-        self.llm = GroqLLM(api_key=groq_api_key)
+        if browser_tools is None:
+            self.browser_tools = BrowserTools()
+        elif hasattr(browser_tools, "execute_tool"):
+            self.browser_tools = browser_tools
+        else:
+            self.browser_tools = BrowserTools(driver=browser_tools)
+        
+        self.safety_layer = safety_layer
+        
+        # Initialize Groq LLM or custom LLM client
+        if llm_client is not None:
+            self.llm = llm_client
+        else:
+            self.llm = GroqLLM(api_key=groq_api_key)
         
         # Agent state
         self.current_task: Optional[Dict[str, Any]] = None
@@ -56,7 +76,7 @@ class OctopusAgent:
         # Get available tools for LLM
         self.available_tools = self._get_tool_definitions()
         
-        logger.info("Octopus Agent initialized with Groq LLM")
+        logger.info("Octopus Agent initialized")
     
     def _get_tool_definitions(self) -> List[Dict[str, Any]]:
         """Get tool definitions for LLM."""
@@ -167,12 +187,24 @@ class OctopusAgent:
         if result.get('response'):
             self.memory.add_conversation("assistant", result['response'])
         
+        result['success'] = result.get('success', not bool(result.get('error')))
+        result['message'] = result.get('message', result.get('response', ''))
         return result
     
     def _build_context(self) -> Dict[str, Any]:
         """Build current context for the LLM."""
+        current_url = None
+        if hasattr(self.browser_tools, "engine") and self.browser_tools.engine:
+            if hasattr(self.browser_tools.engine, "get_current_url"):
+                current_url = self.browser_tools.engine.get_current_url()
+            elif hasattr(self.browser_tools.engine, "driver") and self.browser_tools.engine.driver:
+                try:
+                    current_url = self.browser_tools.engine.driver.current_url
+                except Exception:
+                    pass
+
         return {
-            "current_url": self.browser_tools.engine.get_current_url() if self.browser_tools.engine.driver else None,
+            "current_url": current_url,
             "current_task": self.current_task,
             "task_progress": f"Step {self.current_step}/{len(self.task_plan)}" if self.task_plan else None,
             "recent_actions": self.memory.get_recent_actions(5),
@@ -196,10 +228,31 @@ class OctopusAgent:
                 tool_name = llm_response.get('tool_name')
                 parameters = llm_response.get('parameters', {})
                 
+                # Check safety permissions
+                if self.safety_layer:
+                    permission = self.safety_layer.check_permission({
+                        "tool": tool_name,
+                        "params": parameters
+                    })
+                    if not permission.get("allowed"):
+                        reason = permission.get("reason", "Permission denied")
+                        logger.warning(f"Action blocked by safety layer: {reason}")
+                        return {
+                            "action": "blocked",
+                            "tool": tool_name,
+                            "error": reason,
+                            "response": f"Action '{tool_name}' blocked by safety layer: {reason}",
+                            "success": False
+                        }
+                
                 logger.info(f"Executing tool: {tool_name} with params: {parameters}")
                 
-                # Execute the tool
-                result = await self.browser_tools.execute_tool(tool_name, parameters)
+                # Execute the tool (handles sync or async)
+                exec_result = self.browser_tools.execute_tool(tool_name, parameters)
+                if asyncio.iscoroutine(exec_result):
+                    result = await exec_result
+                else:
+                    result = exec_result
                 
                 # Store action in memory
                 self.memory.add_action({
@@ -369,6 +422,22 @@ class OctopusAgent:
             "memory_size": len(self.memory.conversation_history),
             "available_platforms": list(PLATFORM_WORKFLOWS.keys())
         }
+
+    def execute_task(self, user_input: str) -> Dict[str, Any]:
+        """
+        Synchronous execution entry point (compatible with OctopusSystem and scripts).
+        """
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor() as pool:
+                    return pool.submit(asyncio.run, self.process_request(user_input)).result()
+            else:
+                return loop.run_until_complete(self.process_request(user_input))
+        except RuntimeError:
+            return asyncio.run(self.process_request(user_input))
+
 
 
 # Convenience function for quick automation

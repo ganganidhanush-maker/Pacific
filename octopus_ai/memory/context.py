@@ -68,19 +68,30 @@ class Memory:
         """Get recent conversation history"""
         return self.conversation_history[-limit:]
     
-    def add_action(self, action: Dict[str, Any], result: Dict[str, Any]) -> None:
+    def add_action(self, action: Dict[str, Any], result: Optional[Dict[str, Any]] = None) -> None:
         """
         Record an action and its result
         
         Args:
-            action: The action taken (tool call)
-            result: The result of the action
+            action: The action taken (tool call) or action dict with result
+            result: The result of the action (optional if included in action)
         """
-        self.action_history.append({
-            "action": action,
-            "result": result,
-            "timestamp": datetime.now().isoformat()
-        })
+        if result is None and isinstance(action, dict) and "result" in action:
+            act = action.get("action", {k: v for k, v in action.items() if k != "result"})
+            res = action.get("result", {})
+            entry = {
+                "action": act,
+                "result": res,
+                "timestamp": action.get("timestamp", datetime.now().isoformat())
+            }
+        else:
+            entry = {
+                "action": action,
+                "result": result or {},
+                "timestamp": datetime.now().isoformat()
+            }
+        
+        self.action_history.append(entry)
         
         # Trim if too long
         if len(self.action_history) > self.max_history_length:
@@ -89,6 +100,14 @@ class Memory:
     def get_action_history(self, limit: int = 20) -> List[Dict[str, Any]]:
         """Get recent action history"""
         return self.action_history[-limit:]
+    
+    def get_recent_actions(self, limit: int = 5) -> List[Dict[str, Any]]:
+        """Get recent actions (alias for get_action_history)"""
+        return self.get_action_history(limit=limit)
+
+    def clear(self) -> None:
+        """Clear all memory (alias for clear_all)"""
+        self.clear_all()
     
     def set_current_task(self, task: Dict[str, Any]) -> None:
         """Set the current task being executed"""

@@ -573,13 +573,83 @@ class ToolRegistry:
             for name, tool in self.tools.items()
         ]
     
-    def execute_tool(self, tool_name: str, **kwargs) -> Dict[str, Any]:
-        """Execute a tool by name"""
+    def execute_tool(self, tool_name: str, parameters: Optional[Dict[str, Any]] = None, **kwargs) -> Dict[str, Any]:
+        """Execute a tool by name with optional parameters dict or kwargs"""
         tool = self.get_tool(tool_name)
         if not tool:
             return {"success": False, "error": f"Tool not found: {tool_name}"}
         
-        return tool.execute(**kwargs)
+        params = dict(parameters or {})
+        params.update(kwargs)
+        return tool.execute(**params)
+
+
+class BrowserTools:
+    """
+    High-level interface for browser automation tools.
+    Wraps BrowserEngine and ToolRegistry, and provides execute_tool that
+    can be awaited or called synchronously.
+    """
+    
+    def __init__(self, engine=None, driver=None):
+        if engine is not None:
+            self.engine = engine
+        elif driver is not None:
+            from ..engine.selenium_engine import BrowserEngine
+            self.engine = BrowserEngine()
+            self.engine.driver = driver
+            self.engine.is_initialized = True
+        else:
+            from ..engine.selenium_engine import BrowserEngine
+            self.engine = BrowserEngine()
+        
+        driver_to_use = self.engine.get_driver() if hasattr(self.engine, "get_driver") else driver
+        self.registry = ToolRegistry(driver=driver_to_use)
+    
+    def set_driver(self, driver):
+        """Update driver for tools in registry"""
+        self.registry = ToolRegistry(driver=driver)
+        if hasattr(self.engine, "driver"):
+            self.engine.driver = driver
+            self.engine.is_initialized = driver is not None
+
+    def _normalize_params(self, tool_name: str, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Normalize parameters from LLM format to tool implementation format"""
+        normalized = dict(params)
+        
+        # Mapping for browser.type
+        if tool_name == "browser.type":
+            if "clear_first" in normalized and "clear" not in normalized:
+                normalized["clear"] = normalized.pop("clear_first")
+        
+        # Mapping for browser.wait
+        if tool_name == "browser.wait":
+            if "seconds" in normalized and "value" not in normalized:
+                normalized["condition"] = "seconds"
+                normalized["value"] = normalized.pop("seconds")
+
+        # Mapping for browser.read
+        if tool_name == "browser.read":
+            if "all_text" in normalized and normalized.get("all_text"):
+                normalized.pop("selector", None)
+
+        return normalized
+
+    async def execute_tool(self, tool_name: str, parameters: Optional[Dict[str, Any]] = None, **kwargs) -> Dict[str, Any]:
+        """Async execution of a tool"""
+        return self.execute_tool_sync(tool_name, parameters, **kwargs)
+
+    def execute_tool_sync(self, tool_name: str, parameters: Optional[Dict[str, Any]] = None, **kwargs) -> Dict[str, Any]:
+        """Synchronous execution of a tool"""
+        params = dict(parameters or {})
+        params.update(kwargs)
+        normalized = self._normalize_params(tool_name, params)
+        return self.registry.execute_tool(tool_name, **normalized)
+
+    def list_tools(self) -> List[Dict[str, Any]]:
+        """List all available tools"""
+        return self.registry.list_tools()
+
 
 
 # Example usage

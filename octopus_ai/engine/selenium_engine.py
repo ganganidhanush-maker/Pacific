@@ -35,7 +35,7 @@ class BrowserEngine:
             chrome_options = Options()
             
             if self.headless:
-                chrome_options.add_argument("--headless")
+                chrome_options.add_argument("--headless=new")
             
             # Standard options for automation
             chrome_options.add_argument("--no-sandbox")
@@ -60,7 +60,15 @@ class BrowserEngine:
                 service = Service(self.chrome_path)
                 self.driver = webdriver.Chrome(service=service, options=chrome_options)
             else:
-                self.driver = webdriver.Chrome(options=chrome_options)
+                try:
+                    self.driver = webdriver.Chrome(options=chrome_options)
+                except Exception:
+                    try:
+                        from webdriver_manager.chrome import ChromeDriverManager
+                        service = Service(ChromeDriverManager().install())
+                        self.driver = webdriver.Chrome(service=service, options=chrome_options)
+                    except Exception:
+                        raise
             
             # Execute CDP command to hide automation
             self.driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
@@ -93,6 +101,15 @@ class BrowserEngine:
     def is_ready(self) -> bool:
         """Check if browser is ready for automation"""
         return self.is_initialized and self.driver is not None
+
+    def get_current_url(self) -> Optional[str]:
+        """Get current URL if browser is ready, else None"""
+        if self.is_ready() and self.driver:
+            try:
+                return self.driver.current_url
+            except Exception:
+                return None
+        return None
     
     def navigate_to(self, url: str) -> Dict[str, Any]:
         """Navigate to a URL"""

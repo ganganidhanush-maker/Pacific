@@ -16,7 +16,26 @@ Environment Variables:
 
 import asyncio
 import os
+import sys
+from pathlib import Path
 from dotenv import load_dotenv
+
+# Configure utf-8 encoding for Windows console
+if sys.stdout and hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+if sys.stderr and hasattr(sys.stderr, "reconfigure"):
+    try:
+        sys.stderr.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
+# Ensure repository root is in sys.path
+repo_root = Path(__file__).resolve().parent.parent
+if str(repo_root) not in sys.path:
+    sys.path.insert(0, str(repo_root))
 
 # Load environment variables
 load_dotenv()
@@ -47,16 +66,17 @@ async def main():
     print("=" * 60)
     print()
     
-    # Initialize agent with Groq API key from environment
+    # Initialize agent with Groq API key from environment (or fallback mode)
     groq_api_key = os.getenv("GROQ_API_KEY")
     
     if not groq_api_key:
-        print("ERROR: GROQ_API_KEY not found in environment!")
-        print("Please set GROQ_API_KEY environment variable or create a .env file.")
-        print(f"Current env keys: {list(os.environ.keys())}")
-        return
+        print("⚠️  NOTICE: GROQ_API_KEY not found in environment.")
+        print("   Running in rule-based workflow mode.")
+        print("   Set GROQ_API_KEY in your environment for dynamic AI reasoning.")
+        print()
+    else:
+        print(f"✓ Groq API key loaded")
     
-    print(f"✓ Groq API key loaded")
     print(f"✓ Initializing Octopus Agent...")
     
     try:
