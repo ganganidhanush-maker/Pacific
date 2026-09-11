@@ -1,0 +1,186 @@
+"""
+Octopus Browser Engine - Selenium Integration
+
+This module provides the browser engine that executes tool commands.
+Currently uses Selenium WebDriver, with Playwright as a future option.
+"""
+
+from typing import Dict, Any, Optional
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
+
+
+class BrowserEngine:
+    """
+    Browser Engine for Octopus
+    
+    Manages the Selenium WebDriver instance and provides
+    low-level browser control for the tool layer.
+    """
+    
+    def __init__(self, headless: bool = False, chrome_path: Optional[str] = None):
+        self.driver: Optional[webdriver.Chrome] = None
+        self.headless = headless
+        self.chrome_path = chrome_path
+        self.is_initialized = False
+    
+    def initialize(self) -> Dict[str, Any]:
+        """
+        Initialize the Chrome WebDriver
+        
+        Returns status dict with success/error info
+        """
+        try:
+            chrome_options = Options()
+            
+            if self.headless:
+                chrome_options.add_argument("--headless")
+            
+            # Standard options for automation
+            chrome_options.add_argument("--no-sandbox")
+            chrome_options.add_argument("--disable-dev-shm-usage")
+            chrome_options.add_argument("--disable-gpu")
+            chrome_options.add_argument("--window-size=1920,1080")
+            chrome_options.add_argument("--disable-blink-features=AutomationControlled")
+            
+            # Prevent detection
+            chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
+            chrome_options.add_experimental_option("useAutomationExtension", False)
+            
+            # Set user agent
+            chrome_options.add_argument(
+                "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/120.0.0.0 Safari/537.36"
+            )
+            
+            # Initialize driver
+            if self.chrome_path:
+                service = Service(self.chrome_path)
+                self.driver = webdriver.Chrome(service=service, options=chrome_options)
+            else:
+                self.driver = webdriver.Chrome(options=chrome_options)
+            
+            # Execute CDP command to hide automation
+            self.driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
+                "source": """
+                    Object.defineProperty(navigator, 'webdriver', {
+                        get: () => undefined
+                    })
+                """
+            })
+            
+            self.is_initialized = True
+            
+            return {
+                "success": True,
+                "message": "Browser initialized successfully",
+                "headless": self.headless
+            }
+            
+        except Exception as e:
+            return {
+                "success": False,
+                "error": str(e),
+                "message": "Failed to initialize browser"
+            }
+    
+    def get_driver(self) -> Optional[webdriver.Chrome]:
+        """Get the WebDriver instance"""
+        return self.driver
+    
+    def is_ready(self) -> bool:
+        """Check if browser is ready for automation"""
+        return self.is_initialized and self.driver is not None
+    
+    def navigate_to(self, url: str) -> Dict[str, Any]:
+        """Navigate to a URL"""
+        if not self.is_ready():
+            return {"success": False, "error": "Browser not initialized"}
+        
+        try:
+            self.driver.get(url)
+            return {
+                "success": True,
+                "url": self.driver.current_url,
+                "title": self.driver.title
+            }
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+    
+    def get_page_info(self) -> Dict[str, Any]:
+        """Get current page information"""
+        if not self.is_ready():
+            return {"success": False, "error": "Browser not initialized"}
+        
+        return {
+            "success": True,
+            "url": self.driver.current_url,
+            "title": self.driver.title,
+            "page_source_length": len(self.driver.page_source)
+        }
+    
+    def take_screenshot(self) -> Dict[str, Any]:
+        """Take a screenshot"""
+        if not self.is_ready():
+            return {"success": False, "error": "Browser not initialized"}
+        
+        try:
+            screenshot = self.driver.get_screenshot_as_base64()
+            return {
+                "success": True,
+                "screenshot_base64": screenshot,
+                "url": self.driver.current_url
+            }
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+    
+    def quit(self) -> Dict[str, Any]:
+        """Close the browser and quit the driver"""
+        if not self.is_ready():
+            return {"success": False, "error": "Browser not initialized"}
+        
+        try:
+            self.driver.quit()
+            self.is_initialized = False
+            self.driver = None
+            return {"success": True, "message": "Browser closed"}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+    
+    def __enter__(self):
+        """Context manager entry"""
+        self.initialize()
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager exit - ensure browser is closed"""
+        if self.is_ready():
+            self.quit()
+
+
+# Example usage
+if __name__ == "__main__":
+    print("Testing Browser Engine...")
+    
+    # Create engine (don't actually start browser in this demo)
+    engine = BrowserEngine(headless=True)
+    
+    # Show what would happen
+    print("\nBrowser Engine Configuration:")
+    print(f"Headless: {engine.headless}")
+    print(f"Ready: {engine.is_ready()}")
+    
+    # Note: Uncomment below to actually test with browser
+    # result = engine.initialize()
+    # print(f"\nInitialize result: {result}")
+    # 
+    # if engine.is_ready():
+    #     nav_result = engine.navigate_to("https://www.google.com")
+    #     print(f"Navigated: {nav_result}")
+    #     
+    #     info = engine.get_page_info()
+    #     print(f"Page info: {info}")
+    #     
+    #     engine.quit()
