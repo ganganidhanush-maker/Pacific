@@ -219,7 +219,7 @@ async def main():
             driver=engine.get_driver(),
             groq_llm=agent.llm,
             memory=agent.memory,
-            allow_group_replies=False,
+            allow_group_replies=os.getenv("ALLOW_GROUP_REPLIES", "true").lower() in ("true", "1", "yes"),
             user_name="Dhanush"
         )
         responder.set_whatsapp_handle(whatsapp_handle)

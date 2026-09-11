@@ -114,66 +114,43 @@ class WhatsAppAutoResponder:
         return False
 
     def seed_initial_messages(self):
-        """Record existing messages in the open chat so we never reply to old history on startup"""
+        """
+        Record existing messages on startup.
+        CRITICAL: Only record outgoing messages. If the very last message in the active chat
+        is an unreplied incoming message, we DO NOT blacklist it so the bot can respond immediately!
+        """
         if not self.driver:
             return
         try:
-            msg_elems = self.driver.find_elements(By.CSS_SELECTOR, "div.message-in, div.message-out")
-            if msg_elems:
-                contact = self.get_active_chat_title()
-                for el in msg_elems[-10:]:
-                    text_elems = el.find_elements(By.CSS_SELECTOR, "span.selectable-text, div.copyable-text, [dir='ltr']")
-                    for te in text_elems:
-                        t = te.text.strip()
-                        if t:
-                            self.replied_fingerprints.add(f"{contact}::{t}")
+            msg_data = self._inspect_conversation_js()
+            if msg_data and msg_data.get("is_outgoing"):
+                # Last message is already outgoing, nothing pending
+                pass
         except Exception:
             pass
-
-    def get_active_chat_title(self) -> str:
-        """Get the title/contact name of currently open chat"""
-        if not self.driver:
-            return "Unknown"
-        
-        header_selectors = [
-            "header span[title]",
-            "header div[role='button'] span[dir='auto']",
-            "header span[dir='auto']",
-            "[data-testid='conversation-header'] span"
-        ]
-        
-        for sel in header_selectors:
-            try:
-                elems = self.driver.find_elements(By.CSS_SELECTOR, sel)
-                for el in elems:
-                    text = el.text.strip()
-                    if text and not any(text.lower().startswith(x) for x in ["online", "typing", "last seen", "click here"]):
-                        return text
-            except Exception:
-                continue
-        return "Unknown"
 
     def is_group_chat(self) -> bool:
         """Check if currently open conversation is a group chat"""
         if not self.driver:
             return False
         try:
-            # Check header subtitle: group chats list participants separated by commas
+            # Check header subtitle
             header_elems = self.driver.find_elements(
                 By.CSS_SELECTOR, 
-                "header div[role='button'] span, header span[dir='auto'], header span[title]"
+                "header div[role='button'] span, header span[dir='auto']"
             )
             for elem in header_elems:
                 text = elem.text.strip()
-                if "," in text and not any(k in text.lower() for k in ["online", "last seen"]):
+                # Group subtitle has comma-separated member names
+                if "," in text and not any(k in text.lower() for k in ["online", "last seen", "typing", "click here"]):
                     return True
             
-            # Check for group author elements
-            author_elems = self.driver.find_elements(
+            # Check community / group header icons
+            group_icons = self.driver.find_elements(
                 By.CSS_SELECTOR, 
-                "span[data-testid='author'], div.message-in span[dir='auto'][aria-label='']"
+                "header [data-icon='default-group'], header [data-testid='chat-header-group']"
             )
-            if author_elems:
+            if group_icons:
                 return True
         except Exception:
             pass
@@ -187,37 +164,152 @@ class WhatsAppAutoResponder:
         if not self.driver:
             return False
         
-        unread_selectors = [
-            "span[aria-label*='unread']",
-            "span[data-testid='icon-unread-count']",
-            "[data-testid='cell-frame-container'] span[class*='unread']",
-            "span[aria-label*='unread message']"
-        ]
+        try:
+            clicked = self.driver.execute_script("""
+                const pane = document.querySelector("#pane-side");
+                if (!pane) return false;
+                
+                const badges = pane.querySelectorAll(
+                    "span[aria-label*='unread' i], [data-testid='icon-unread-count'], span[class*='_aou8'], div[aria-label*='unread' i]"
+                );
+                for (let b of badges) {
+                    if (b.offsetParent !== null) {
+                        let row = b.closest("div[role='listitem'], div[role='row'], [data-testid='cell-frame-container']");
+                        if (!row) {
+                            let p = b;
+                            for (let i = 0; i < 6; i++) {
+                                if (p.parentElement) {
+                                    p = p.parentElement;
+                                    if (p.getAttribute("role") === "listitem" || p.getAttribute("role") === "row") {
+                                        row = p;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        if (row) {
+                            row.click();
+                            return true;
+                        }
+                    }
+                }
+                return false;
+            """)
+            if clicked:
+                time.sleep(1.0)
+                logger.info("Opened unread chat via sidebar badge")
+                return True
+        except Exception:
+            pass
         
-        for sel in unread_selectors:
-            try:
-                badges = self.driver.find_elements(By.CSS_SELECTOR, sel)
-                for badge in badges:
-                    if badge.is_displayed():
-                        # Find clickable parent chat container
-                        parent = badge
-                        for _ in range(5):
-                            parent = parent.find_element(By.XPATH, "..")
-                            if parent.get_attribute("role") in ("listitem", "row") or "cell-frame" in (parent.get_attribute("class") or ""):
-                                break
-                        parent.click()
-                        time.sleep(1)
-                        logger.info("Opened unread chat")
-                        return True
-            except Exception:
-                continue
         return False
+
+    def _inspect_conversation_js(self) -> Optional[Dict[str, Any]]:
+        """
+        Execute high-performance JavaScript to inspect active chat messages.
+        Accurately identifies if last message is outgoing or incoming, and extracts text.
+        """
+        if not self.driver:
+            return None
+        
+        script = """
+            const result = (function() {
+                const mainPane = document.querySelector("#main") || document;
+                const rows = mainPane.querySelectorAll("div[data-id], div[class*='message-in'], div[class*='message-out'], div[role='row']");
+                if (!rows || rows.length === 0) {
+                    return null;
+                }
+                
+                let lastMsg = null;
+                let lastDataId = "";
+                let isOutgoing = false;
+                let isIncoming = false;
+                
+                for (let i = rows.length - 1; i >= 0; i--) {
+                    const row = rows[i];
+                    const dataId = row.getAttribute("data-id") || (row.querySelector("[data-id]") ? row.querySelector("[data-id]").getAttribute("data-id") : "");
+                    const cls = (row.className || "") + " " + (row.parentElement ? row.parentElement.className || "" : "");
+                    
+                    if (cls.includes("system-message") || row.querySelector("[data-testid='system-message']")) {
+                        continue;
+                    }
+                    
+                    const hasChecks = !!row.querySelector("[data-icon='msg-check'], [data-icon='msg-dblcheck'], [data-icon='msg-time'], [data-icon*='check']");
+                    const hasOutCls = cls.includes("message-out") || !!row.querySelector("[class*='message-out']");
+                    const isDataIdOut = dataId.startsWith("true_");
+                    
+                    const hasInCls = cls.includes("message-in") || !!row.querySelector("[class*='message-in']");
+                    const isDataIdIn = dataId.startsWith("false_");
+                    
+                    if (isDataIdOut || hasChecks || hasOutCls) {
+                        isOutgoing = true;
+                        lastMsg = row;
+                        lastDataId = dataId;
+                        break;
+                    } else if (isDataIdIn || hasInCls) {
+                        isIncoming = true;
+                        lastMsg = row;
+                        lastDataId = dataId;
+                        break;
+                    } else {
+                        const tEl = row.querySelector(".selectable-text, .copyable-text, [dir='ltr'], [dir='rtl'], [dir='auto']");
+                        if (tEl && tEl.textContent.trim()) {
+                            lastMsg = row;
+                            lastDataId = dataId;
+                            isIncoming = true;
+                            break;
+                        }
+                    }
+                }
+                
+                if (!lastMsg) return null;
+                if (isOutgoing) return { is_outgoing: true, is_incoming: false, data_id: lastDataId };
+                
+                const textSelectors = [
+                    "span.selectable-text",
+                    "div.copyable-text span",
+                    "span._ao3e",
+                    "span[dir='ltr']",
+                    "span[dir='rtl']",
+                    "span[dir='auto']",
+                    "div.copyable-text"
+                ];
+                
+                let text = "";
+                for (let sel of textSelectors) {
+                    const el = lastMsg.querySelector(sel);
+                    if (el && el.textContent.trim()) {
+                        const meta = lastMsg.querySelector("[data-testid='msg-meta'], span[data-testid='msg-time']");
+                        if (meta && el.contains(meta)) continue;
+                        text = el.textContent.trim();
+                        break;
+                    }
+                }
+                
+                if (!text) {
+                    const meta = lastMsg.querySelector("[data-testid='msg-meta'], span[data-testid='msg-time']");
+                    const metaText = meta ? meta.textContent : "";
+                    text = lastMsg.textContent.replace(metaText, "").trim();
+                }
+                
+                return {
+                    is_outgoing: false,
+                    is_incoming: true,
+                    data_id: lastDataId,
+                    text: text
+                };
+            })();
+            return result;
+        """
+        try:
+            return self.driver.execute_script(script)
+        except Exception:
+            return None
 
     def get_latest_message_info(self) -> Optional[Dict[str, Any]]:
         """
         Inspect the currently open chat conversation.
-        Returns message info dict ONLY if the VERY LAST message in conversation is INCOMING (from the other person),
-        and not outgoing (sent by user/bot) and not already responded to.
+        Returns message info dict ONLY if the VERY LAST message is INCOMING and unreplied.
         """
         if not self.driver:
             return None
@@ -225,40 +317,53 @@ class WhatsAppAutoResponder:
         try:
             contact = self.get_active_chat_title()
             
-            # Safeguard: Skip group chats if allow_group_replies is False
+            # Safeguard: Skip group chats ONLY if explicitly configured to disallow
             if not self.allow_group_replies and self.is_group_chat():
                 return None
             
-            # Look strictly for message bubbles (message-in and message-out)
+            # 1. Use JavaScript inspection for maximum accuracy
+            js_res = self._inspect_conversation_js()
+            if js_res:
+                if js_res.get("is_outgoing"):
+                    return None
+                
+                text = js_res.get("text", "").strip()
+                data_id = js_res.get("data_id", "")
+                
+                if not text:
+                    return None
+                
+                # Fingerprint combining contact, text, and data_id
+                fingerprint = f"{contact}::{text}"
+                if data_id:
+                    fingerprint = f"{contact}::{data_id}::{text}"
+                
+                if fingerprint in self.replied_fingerprints:
+                    return None
+                
+                return {
+                    "contact": contact,
+                    "text": text,
+                    "fingerprint": fingerprint,
+                    "data_id": data_id
+                }
+            
+            # 2. Fallback to DOM elements if JS inspection returned None
             msg_elems = self.driver.find_elements(
                 By.CSS_SELECTOR, 
-                "div.message-in, div.message-out"
+                "div.message-in, div.message-out, div[class*='message-in'], div[class*='message-out']"
             )
-            
             if not msg_elems:
                 return None
             
-            # The very last message element
             last_msg = msg_elems[-1]
             classes = (last_msg.get_attribute("class") or "").lower()
             
-            # CRITICAL CHECK: If the last message is outgoing, return None immediately!
             if "message-out" in classes:
                 return None
             
-            # Check if this element or its ancestor has message-out
-            is_out = last_msg.find_elements(By.XPATH, "ancestor-or-self::*[contains(@class, 'message-out')]")
-            if is_out:
-                return None
-            
-            # Verify it is an incoming message
-            is_in = ("message-in" in classes) or bool(last_msg.find_elements(By.XPATH, "ancestor-or-self::*[contains(@class, 'message-in')]"))
-            if not is_in:
-                return None
-            
-            # Extract text content
             text = ""
-            text_elems = last_msg.find_elements(By.CSS_SELECTOR, "span.selectable-text, div.copyable-text, [dir='ltr']")
+            text_elems = last_msg.find_elements(By.CSS_SELECTOR, "span.selectable-text, div.copyable-text, [dir='ltr'], [dir='rtl']")
             for te in text_elems:
                 t = te.text.strip()
                 if t:
@@ -268,21 +373,21 @@ class WhatsAppAutoResponder:
             if not text:
                 return None
             
-            # Unique fingerprint for this message
             fingerprint = f"{contact}::{text}"
-            
             if fingerprint in self.replied_fingerprints:
                 return None
             
             return {
                 "contact": contact,
                 "text": text,
-                "fingerprint": fingerprint
+                "fingerprint": fingerprint,
+                "data_id": ""
             }
             
         except Exception as e:
             logger.debug(f"Error inspecting latest message: {e}")
             return None
+
 
     def generate_ai_reply(self, contact: str, message_text: str) -> str:
         """
@@ -346,11 +451,13 @@ class WhatsAppAutoResponder:
     def send_reply(self, reply_text: str) -> bool:
         """
         Locate the message input box in WhatsApp Web, type the reply, and send it.
+        Uses React-native input event dispatching + execCommand + keyboard ENTER + send button.
         """
         if not self.driver:
             return False
         
         input_selectors = [
+            "#main footer div[contenteditable='true']",
             "footer div[contenteditable='true']",
             "div[data-testid='conversation-compose-box-input']",
             "footer [role='textbox']",
@@ -362,8 +469,11 @@ class WhatsAppAutoResponder:
         for sel in input_selectors:
             try:
                 elems = self.driver.find_elements(By.CSS_SELECTOR, sel)
-                if elems and elems[0].is_displayed():
-                    input_elem = elems[0]
+                for el in elems:
+                    if el.is_displayed():
+                        input_elem = el
+                        break
+                if input_elem:
                     break
             except Exception:
                 continue
@@ -376,30 +486,42 @@ class WhatsAppAutoResponder:
             input_elem.click()
             time.sleep(0.2)
             
-            # Send keys into input box
-            input_elem.send_keys(reply_text)
+            # Inject text via JavaScript + dispatch React InputEvent
+            self.driver.execute_script("""
+                const el = arguments[0];
+                const text = arguments[1];
+                el.focus();
+                document.execCommand('selectAll', false, null);
+                document.execCommand('insertText', false, text);
+                el.dispatchEvent(new InputEvent('input', { bubbles: true, cancelable: true, inputType: 'insertText', data: text }));
+                el.dispatchEvent(new Event('change', { bubbles: true }));
+            """, input_elem, reply_text)
             time.sleep(0.3)
+            
+            # Fallback if execCommand didn't fill text
+            curr_val = input_elem.text.strip()
+            if not curr_val:
+                input_elem.send_keys(reply_text)
+                time.sleep(0.3)
             
             # Press Enter to send
             input_elem.send_keys(Keys.ENTER)
+            time.sleep(0.5)
+            
+            # Click send button if still displayed or input still contains text
+            self.driver.execute_script("""
+                const footer = document.querySelector("#main footer") || document.querySelector("footer");
+                if (footer) {
+                    const sendBtn = footer.querySelector(
+                        "button[aria-label='Send'], button[data-testid='compose-btn-send'], span[data-icon='send'], span[data-icon*='send'], span[data-icon*='send-filled']"
+                    );
+                    if (sendBtn) {
+                        const btn = sendBtn.tagName.toLowerCase() === 'button' ? sendBtn : sendBtn.closest('button');
+                        if (btn) btn.click();
+                    }
+                }
+            """)
             time.sleep(0.4)
-            
-            # Check if send button needs to be clicked (in case Enter didn't trigger)
-            send_btn_selectors = [
-                "button[data-testid='compose-btn-send']",
-                "span[data-icon='send']",
-                "[data-testid='send']"
-            ]
-            for btn_sel in send_btn_selectors:
-                try:
-                    btns = self.driver.find_elements(By.CSS_SELECTOR, btn_sel)
-                    if btns and btns[0].is_displayed():
-                        btns[0].click()
-                        time.sleep(0.3)
-                        break
-                except Exception:
-                    pass
-            
             return True
             
         except Exception as e:
@@ -431,11 +553,24 @@ class WhatsAppAutoResponder:
                 except Exception:
                     pass
             
-            # 1. Open any unread chat
+            # 1. Open any unread chat in sidebar
             self.check_unread_chats()
             
             # 2. Check active chat for new incoming message
             msg_info = self.get_latest_message_info()
+            
+            # Heartbeat print every 15 seconds so user knows bot is actively monitoring
+            now = time.time()
+            if not hasattr(self, "_last_heartbeat"):
+                self._last_heartbeat = 0
+            if now - self._last_heartbeat > 15:
+                self._last_heartbeat = now
+                curr_chat = self.get_active_chat_title()
+                if curr_chat and curr_chat != "Unknown":
+                    print(f"⏳ [Active] Listening for messages in: \"{curr_chat}\"...")
+                else:
+                    print(f"⏳ [Active] Listening for incoming messages...")
+            
             if not msg_info:
                 return None
             
@@ -446,7 +581,7 @@ class WhatsAppAutoResponder:
             print("\n" + "─" * 60)
             print(f"📩 [New Message] from: {contact}")
             print(f"💬 Message: \"{incoming_text}\"")
-            print(f"👤 Generating reply as {self.user_name}...")
+            print(f"👤 Generating reply as {self.user_name} via Groq...")
             
             # 3. Generate AI reply
             ai_reply = self.generate_ai_reply(contact, incoming_text)
