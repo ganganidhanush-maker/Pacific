@@ -1,218 +1,401 @@
 """
-Octopus AI Agent - The Brain of the System
+Octopus AI Agent - Main Brain
 
-The AI Agent is responsible for:
-- Understanding user requests
-- Planning tasks
-- Making decisions
-- Selecting tools
-- Observing results
-- Adapting until task completion
+This is the central intelligence module that:
+- Understands user requests
+- Plans multi-step tasks
+- Makes decisions
+- Selects and calls appropriate tools
+- Maintains conversation context
+- Handles errors and adapts plans
 """
 
-from typing import List, Dict, Any, Optional
-from abc import ABC, abstractmethod
+import logging
+from typing import Dict, List, Any, Optional
+from datetime import datetime
+
+from .groq_llm import GroqLLM, get_platform_workflow, PLATFORM_WORKFLOWS
+from ..memory.context import Memory
+from ..tools.browser_tools import BrowserTools
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 
-class BaseAgent(ABC):
-    """Abstract base class for the Octopus AI Agent"""
-    
-    @abstractmethod
-    def understand(self, user_input: str) -> Dict[str, Any]:
-        """Parse and understand the user's request"""
-        pass
-    
-    @abstractmethod
-    def plan(self, goal: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """Create a step-by-step plan to achieve the goal"""
-        pass
-    
-    @abstractmethod
-    def decide_next_action(self, current_state: Dict[str, Any]) -> Dict[str, Any]:
-        """Decide the next action based on current state"""
-        pass
-    
-    @abstractmethod
-    def observe(self, result: Dict[str, Any]) -> Dict[str, Any]:
-        """Observe and interpret the result of an action"""
-        pass
-    
-    @abstractmethod
-    def is_task_complete(self, state: Dict[str, Any]) -> bool:
-        """Determine if the task is complete"""
-        pass
-
-
-class OctopusAgent(BaseAgent):
+class OctopusAgent:
     """
-    Main AI Agent implementation for Octopus
+    The main AI Agent brain for Octopus.
     
-    This is the brain of the system that:
-    - Understands natural language requests
-    - Plans multi-step tasks
-    - Calls browser automation tools
-    - Observes results
-    - Adapts until completion
+    Orchestrates understanding, planning, decision-making, and tool execution
+    using Groq LLM for intelligence.
     """
     
-    def __init__(self, llm_client=None, memory=None, safety_layer=None):
-        self.llm_client = llm_client
-        self.memory = memory
-        self.safety_layer = safety_layer
-        self.current_task = None
-        self.action_history = []
-    
-    def understand(self, user_input: str) -> Dict[str, Any]:
+    def __init__(self, memory: Optional[Memory] = None, 
+                 browser_tools: Optional[BrowserTools] = None,
+                 groq_api_key: Optional[str] = None):
         """
-        Parse user input and extract:
-        - Goal/Intent
-        - Platform (website)
-        - Parameters (contacts, messages, etc.)
-        - Constraints
-        """
-        # TODO: Implement LLM-based intent recognition
-        return {
-            "goal": user_input,
-            "platform": None,
-            "parameters": {},
-            "constraints": []
-        }
-    
-    def plan(self, goal: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """
-        Create a step-by-step plan
+        Initialize the Octopus Agent.
         
-        Example for WhatsApp message:
-        1. Open WhatsApp Web
-        2. Check authentication
-        3. Find contact
-        4. Open conversation
-        5. Type message
-        6. Send message
-        7. Verify delivery
+        Args:
+            memory: Memory instance for context (creates new if None)
+            browser_tools: BrowserTools instance (creates new if None)
+            groq_api_key: Groq API key (uses env var if None)
         """
-        # TODO: Implement LLM-based planning
-        return []
-    
-    def decide_next_action(self, current_state: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Based on current state, decide which tool to call
+        self.memory = memory or Memory()
+        self.browser_tools = browser_tools or BrowserTools()
         
-        Returns action like:
-        {
-            "tool": "browser.click",
-            "params": {"element": "contact_name"},
-            "expected_result": "conversation_opens"
-        }
-        """
-        # TODO: Implement decision logic
-        return {}
-    
-    def observe(self, result: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Observe the result of an action
+        # Initialize Groq LLM
+        self.llm = GroqLLM(api_key=groq_api_key)
         
-        Extracts:
-        - Success/failure
-        - New page state
-        - Errors
-        - Relevant data
-        """
-        # TODO: Implement observation logic
-        return {
-            "success": result.get("success", False),
-            "new_state": result.get("state", {}),
-            "error": result.get("error", None)
-        }
-    
-    def is_task_complete(self, state: Dict[str, Any]) -> bool:
-        """Check if the task has been completed successfully"""
-        # TODO: Implement completion detection
-        return False
-    
-    def execute_task(self, user_input: str) -> Dict[str, Any]:
-        """
-        Main execution loop:
+        # Agent state
+        self.current_task: Optional[Dict[str, Any]] = None
+        self.task_plan: List[Dict[str, Any]] = []
+        self.current_step: int = 0
+        self.is_running: bool = False
         
-        1. Understand request
-        2. Create plan
-        3. Loop:
-           a. Decide next action
-           b. Call tool
-           c. Observe result
-           d. Check if complete
-        4. Return final result
+        # Get available tools for LLM
+        self.available_tools = self._get_tool_definitions()
+        
+        logger.info("Octopus Agent initialized with Groq LLM")
+    
+    def _get_tool_definitions(self) -> List[Dict[str, Any]]:
+        """Get tool definitions for LLM."""
+        return [
+            {
+                "name": "browser.open",
+                "description": "Open a URL in the browser. Use this to navigate to websites like WhatsApp, Instagram, Canva.",
+                "parameters": {"url": "string (required) - The URL to open"}
+            },
+            {
+                "name": "browser.click",
+                "description": "Click on an element. Use selector or description to identify the element.",
+                "parameters": {
+                    "selector": "string (optional) - CSS selector or XPath",
+                    "description": "string (optional) - Description of element to click"
+                }
+            },
+            {
+                "name": "browser.type",
+                "description": "Type text into an input field.",
+                "parameters": {
+                    "selector": "string (optional) - CSS selector or XPath of input",
+                    "text": "string (required) - Text to type",
+                    "clear_first": "boolean (optional) - Clear existing text first"
+                }
+            },
+            {
+                "name": "browser.read",
+                "description": "Read content from the page. Returns text content of elements.",
+                "parameters": {
+                    "selector": "string (optional) - CSS selector or XPath",
+                    "all_text": "boolean (optional) - Read all visible text"
+                }
+            },
+            {
+                "name": "browser.scroll",
+                "description": "Scroll the page up or down.",
+                "parameters": {
+                    "direction": "string (required) - 'up' or 'down'",
+                    "amount": "number (optional) - Pixels to scroll"
+                }
+            },
+            {
+                "name": "browser.wait",
+                "description": "Wait for a specified time or condition.",
+                "parameters": {
+                    "seconds": "number (optional) - Seconds to wait",
+                    "condition": "string (optional) - Condition to wait for"
+                }
+            },
+            {
+                "name": "browser.back",
+                "description": "Navigate back in browser history.",
+                "parameters": {}
+            },
+            {
+                "name": "browser.refresh",
+                "description": "Refresh the current page.",
+                "parameters": {}
+            },
+            {
+                "name": "browser.screenshot",
+                "description": "Take a screenshot of the current page.",
+                "parameters": {
+                    "filename": "string (optional) - Filename for screenshot"
+                }
+            },
+            {
+                "name": "browser.find",
+                "description": "Find elements on the page matching criteria.",
+                "parameters": {
+                    "selector": "string (optional) - CSS selector or XPath",
+                    "text": "string (optional) - Text to search for",
+                    "tag": "string (optional) - HTML tag name"
+                }
+            }
+        ]
+    
+    async def process_request(self, user_message: str) -> Dict[str, Any]:
         """
-        # Step 1: Understand
-        goal = self.understand(user_input)
-        self.current_task = goal
+        Process a user request through the full agent loop.
+        
+        Args:
+            user_message: User's input message
+            
+        Returns:
+            Response dictionary with action and result
+        """
+        logger.info(f"Processing request: {user_message[:100]}...")
         
         # Store in memory
-        if self.memory:
-            self.memory.store("current_task", goal)
+        self.memory.add_conversation("user", user_message)
         
-        # Step 2: Plan
-        plan = self.plan(goal)
+        # Get current context
+        context = self._build_context()
         
-        # Step 3: Execute loop
-        max_iterations = 50
-        iteration = 0
+        # Call Groq LLM for decision
+        llm_response = self.llm.chat(
+            user_message=user_message,
+            context=context,
+            available_tools=self.available_tools
+        )
         
-        while iteration < max_iterations:
-            # Get current state
-            current_state = {
-                "task": goal,
-                "plan": plan,
-                "history": self.action_history,
-                "iteration": iteration
+        # Process the response
+        result = await self._execute_action(llm_response)
+        
+        # Store agent response
+        if result.get('response'):
+            self.memory.add_conversation("assistant", result['response'])
+        
+        return result
+    
+    def _build_context(self) -> Dict[str, Any]:
+        """Build current context for the LLM."""
+        return {
+            "current_url": self.browser_tools.engine.get_current_url() if self.browser_tools.engine.driver else None,
+            "current_task": self.current_task,
+            "task_progress": f"Step {self.current_step}/{len(self.task_plan)}" if self.task_plan else None,
+            "recent_actions": self.memory.get_recent_actions(5),
+            "platform_workflows": list(PLATFORM_WORKFLOWS.keys())
+        }
+    
+    async def _execute_action(self, llm_response: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Execute the action decided by the LLM.
+        
+        Args:
+            llm_response: Response from Groq LLM
+            
+        Returns:
+            Execution result
+        """
+        action = llm_response.get('action', 'response')
+        
+        try:
+            if action == 'tool_call':
+                tool_name = llm_response.get('tool_name')
+                parameters = llm_response.get('parameters', {})
+                
+                logger.info(f"Executing tool: {tool_name} with params: {parameters}")
+                
+                # Execute the tool
+                result = await self.browser_tools.execute_tool(tool_name, parameters)
+                
+                # Store action in memory
+                self.memory.add_action({
+                    "tool": tool_name,
+                    "parameters": parameters,
+                    "result": result,
+                    "timestamp": datetime.now().isoformat()
+                })
+                
+                # Observe result and continue if needed
+                observation = self._observe_result(result)
+                
+                # Ask LLM for next action based on observation
+                if not result.get('error'):
+                    next_response = self.llm.chat(
+                        user_message=f"Tool '{tool_name}' executed successfully. Observation: {observation}. What should I do next?",
+                        context=self._build_context(),
+                        available_tools=self.available_tools
+                    )
+                    
+                    # Recursively execute next action if needed
+                    if next_response.get('action') == 'tool_call':
+                        return await self._execute_action(next_response)
+                
+                return {
+                    "action": action,
+                    "tool": tool_name,
+                    "result": result,
+                    "observation": observation,
+                    "response": f"Completed: {tool_name}"
+                }
+                
+            elif action == 'plan':
+                plan = llm_response.get('plan', [])
+                self.task_plan = plan
+                self.current_step = 0
+                
+                return {
+                    "action": "plan_created",
+                    "plan": plan,
+                    "response": f"I've created a plan with {len(plan)} steps. Starting execution..."
+                }
+                
+            elif action == 'complete':
+                summary = llm_response.get('summary', 'Task completed.')
+                self.current_task = None
+                self.task_plan = []
+                self.is_running = False
+                
+                return {
+                    "action": "complete",
+                    "summary": summary,
+                    "response": summary
+                }
+                
+            elif action == 'wait':
+                reason = llm_response.get('reason', 'Waiting for confirmation or page load.')
+                return {
+                    "action": "wait",
+                    "reason": reason,
+                    "response": reason
+                }
+                
+            else:  # response action
+                content = llm_response.get('content', '')
+                return {
+                    "action": "response",
+                    "content": content,
+                    "response": content
+                }
+                
+        except Exception as e:
+            logger.error(f"Error executing action: {e}")
+            error_response = {
+                "action": "response",
+                "error": str(e),
+                "response": f"I encountered an error: {str(e)}. Let me try a different approach."
             }
             
-            # Check if complete
-            if self.is_task_complete(current_state):
-                return {
-                    "success": True,
-                    "message": "Task completed successfully",
-                    "actions_taken": len(self.action_history)
-                }
+            # Ask LLM for recovery strategy
+            recovery_response = self.llm.chat(
+                user_message=f"Error occurred: {str(e)}. How should I recover or proceed differently?",
+                context=self._build_context(),
+                available_tools=self.available_tools
+            )
             
-            # Decide next action
-            action = self.decide_next_action(current_state)
+            if recovery_response.get('action') == 'tool_call':
+                return await self._execute_action(recovery_response)
             
-            # Safety check
-            if self.safety_layer and not self.safety_layer.check_permission(action):
-                return {
-                    "success": False,
-                    "message": "Action blocked by safety layer",
-                    "action": action
-                }
-            
-            # Execute action (tool calling happens here)
-            # result = self.call_tool(action)
-            # observation = self.observe(result)
-            
-            # self.action_history.append({
-            #     "action": action,
-            #     "result": observation
-            # })
-            
-            iteration += 1
+            return error_response
+    
+    def _observe_result(self, result: Dict[str, Any]) -> str:
+        """
+        Observe and describe the result of an action.
         
+        Args:
+            result: Tool execution result
+            
+        Returns:
+            Observation description
+        """
+        if result.get('error'):
+            return f"Error: {result['error']}"
+        
+        observations = []
+        
+        if result.get('success'):
+            observations.append("Action succeeded")
+        
+        if result.get('url'):
+            observations.append(f"Current URL: {result['url']}")
+        
+        if result.get('text'):
+            text_preview = result['text'][:200]
+            observations.append(f"Page content: {text_preview}...")
+        
+        if result.get('elements_found'):
+            observations.append(f"Found {result['elements_found']} elements")
+        
+        if result.get('screenshot'):
+            observations.append(f"Screenshot saved: {result['screenshot']}")
+        
+        return "; ".join(observations) if observations else "Action completed"
+    
+    def start_task(self, task_description: str, platform: Optional[str] = None):
+        """
+        Start a new task with optional predefined workflow.
+        
+        Args:
+            task_description: Description of the task
+            platform: Platform name (whatsapp, instagram, canva)
+        """
+        self.current_task = {
+            "description": task_description,
+            "platform": platform,
+            "started_at": datetime.now().isoformat()
+        }
+        
+        # Load predefined workflow if platform specified
+        if platform:
+            workflow = get_platform_workflow(platform)
+            if workflow:
+                self.task_plan = workflow.get('steps', [])
+                logger.info(f"Loaded workflow for {platform}: {len(self.task_plan)} steps")
+        
+        self.is_running = True
+        self.current_step = 0
+        
+        logger.info(f"Started task: {task_description}")
+    
+    def clear_memory(self):
+        """Clear agent memory and state."""
+        self.memory.clear()
+        self.llm.clear_history()
+        self.current_task = None
+        self.task_plan = []
+        self.current_step = 0
+        self.is_running = False
+        logger.info("Agent memory cleared")
+    
+    def get_status(self) -> Dict[str, Any]:
+        """Get current agent status."""
         return {
-            "success": False,
-            "message": "Max iterations reached",
-            "actions_taken": len(self.action_history)
+            "is_running": self.is_running,
+            "current_task": self.current_task,
+            "task_progress": f"{self.current_step}/{len(self.task_plan)}" if self.task_plan else "No active task",
+            "memory_size": len(self.memory.conversation_history),
+            "available_platforms": list(PLATFORM_WORKFLOWS.keys())
         }
 
 
-# Example usage
-if __name__ == "__main__":
-    agent = OctopusAgent()
+# Convenience function for quick automation
+async def automate(platform: str, task: str, contact: Optional[str] = None, 
+                   message: Optional[str] = None, groq_api_key: Optional[str] = None):
+    """
+    Quick automation helper for common tasks.
     
-    # Test understanding
-    user_request = "Open WhatsApp Web and reply to Rahul saying I'll call him after 6 PM"
-    goal = agent.understand(user_request)
-    print(f"Understood goal: {goal}")
+    Args:
+        platform: Platform name (whatsapp, instagram, canva)
+        task: Task description
+        contact: Contact name (for messaging)
+        message: Message to send (for messaging)
+        groq_api_key: Groq API key
+        
+    Returns:
+        Automation result
+    """
+    agent = OctopusAgent(groq_api_key=groq_api_key)
     
-    # Test planning
-    plan = agent.plan(goal)
-    print(f"Plan: {plan}")
+    # Build user message
+    user_message = f"Go to {platform}"
+    if contact:
+        user_message += f" and find {contact}"
+    if message:
+        user_message += f" and send message: {message}"
+    if task:
+        user_message += f". Also: {task}"
+    
+    return await agent.process_request(user_message)
