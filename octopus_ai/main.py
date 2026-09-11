@@ -50,22 +50,40 @@ import time
 
 def prepare_main_profile() -> tuple[str, str]:
     """
-    Automatically set up and use the user's primary Chrome profile (Dhanush) without asking.
-    Syncs session tokens, WhatsApp IndexedDB, and Cookies into .chrome_profile so
-    all existing logins work seamlessly without crashing ChromeDriver.
+    Automatically prepare and use the user's primary Chrome profile (Dhanush).
+    Uses a dedicated AutomationData directory that clones the user's real Chrome
+    profiles and encryption keys so all sessions (WhatsApp, Instagram, Canva)
+    load seamlessly without Chrome's default-directory DevTools restrictions or crashes.
     """
     import shutil
     local_app_data = os.environ.get("LOCALAPPDATA", "")
-    src = os.path.join(local_app_data, "Google", "Chrome", "User Data", "Default") if local_app_data else None
-    dst = os.path.abspath(os.path.join(os.path.dirname(__file__), ".chrome_profile", "Default"))
+    if not local_app_data:
+        return ".chrome_profile", "Default Profile"
+
+    src_root = os.path.join(local_app_data, "Google", "Chrome", "User Data")
+    dst_root = os.path.join(local_app_data, "Google", "Chrome", "AutomationData")
     
-    if src and os.path.exists(src):
-        os.makedirs(dst, exist_ok=True)
-        # Sync session and login data into .chrome_profile
-        items_to_sync = ["Network", "IndexedDB", "Local Storage", "Preferences"]
-        for item in items_to_sync:
-            s = os.path.join(src, item)
-            d = os.path.join(dst, item)
+    if os.path.exists(src_root):
+        os.makedirs(dst_root, exist_ok=True)
+        
+        # 1. Sync Local State (contains DPAPI encryption key and profile metadata)
+        src_ls = os.path.join(src_root, "Local State")
+        dst_ls = os.path.join(dst_root, "Local State")
+        if os.path.exists(src_ls):
+            try:
+                shutil.copy2(src_ls, dst_ls)
+            except Exception:
+                pass
+        
+        # 2. Sync Default profile (Dhanush)
+        src_default = os.path.join(src_root, "Default")
+        dst_default = os.path.join(dst_root, "Default")
+        os.makedirs(dst_default, exist_ok=True)
+        
+        items = ["Network", "IndexedDB", "Local Storage", "Preferences", "Secure Preferences"]
+        for item in items:
+            s = os.path.join(src_default, item)
+            d = os.path.join(dst_default, item)
             if os.path.exists(s):
                 try:
                     if os.path.isdir(s):
@@ -74,8 +92,10 @@ def prepare_main_profile() -> tuple[str, str]:
                         shutil.copy2(s, d)
                 except Exception:
                     pass
+        
+        return dst_root, "Personal Chrome Profile (Dhanush)"
     
-    return ".chrome_profile", "Main Profile (Dhanush)"
+    return ".chrome_profile", "Default Profile"
 
 
 async def main():
