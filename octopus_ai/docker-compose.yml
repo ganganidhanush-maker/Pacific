@@ -1,0 +1,30 @@
+version: '3.8'
+
+services:
+  octopus-ai:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: octopus-ai-agent
+    environment:
+      # Groq API Key - load from .env file (DO NOT hardcode here)
+      - GROQ_API_KEY=${GROQ_API_KEY:-}
+      # Optional: Model selection
+      - GROQ_MODEL=llama-3.1-70b-versatile
+      # Browser settings
+      - BROWSER_HEADLESS=true
+      - BROWSER_WINDOW_SIZE=1920,1080
+    volumes:
+      # Mount local code for development
+      - .:/app
+      # Persistent Chrome data for sessions/cookies
+      - chrome-data:/app/chrome-data
+    working_dir: /app
+    stdin_open: true
+    tty: true
+    # Virtual display is handled by entrypoint script
+    ipc: host
+
+volumes:
+  chrome-data:
+    driver: local
