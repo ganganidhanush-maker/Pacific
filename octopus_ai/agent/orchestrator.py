@@ -54,10 +54,10 @@ class MasterOrchestrator:
 
         user_content = f"Decompose this request:\n\"{raw_prompt}\""
         
-        # Call Local LLM or Groq to optimize the prompt
+        # Call Local LLM or Groq to optimize the prompt (with history isolated)
         try:
             full_prompt = f"{system_prompt}\n\nUser Request: {raw_prompt}\n\nJSON Output:"
-            raw_response = await local_llm_instance.generate_response(full_prompt)
+            raw_response = await local_llm_instance.generate_response(full_prompt, add_to_history=False)
             # Clean JSON markdown if model wrapped it in ```json ... ```
             cleaned = re.sub(r"^```json\s*", "", raw_response.strip(), flags=re.MULTILINE)
             cleaned = re.sub(r"^```\s*$", "", cleaned.strip(), flags=re.MULTILINE).strip()

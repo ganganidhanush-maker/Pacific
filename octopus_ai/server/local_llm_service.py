@@ -129,10 +129,15 @@ class LocalLLMService:
 
         return self.is_server_listening()
 
-    async def generate_response(self, prompt: str) -> str:
+    async def generate_response(
+        self,
+        prompt: str,
+        add_to_history: bool = True,
+        system_override: Optional[str] = None
+    ) -> str:
         """
         Generate chat response using local Ollama LLM.
-        Maintains conversational history for multi-turn context.
+        Maintains conversational history for user chat, while isolating internal orchestration prompts.
         """
         cleaned_prompt = prompt.strip()
         if not cleaned_prompt:
@@ -145,9 +150,13 @@ class LocalLLMService:
             return self._fallback_chat(cleaned_prompt)
 
         # Build message history
-        messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-        for msg in self.conversation_history[-self.max_history:]:
-            messages.append(msg)
+        sys_msg = system_override or SYSTEM_PROMPT
+        messages = [{"role": "system", "content": sys_msg}]
+
+        if add_to_history:
+            for msg in self.conversation_history[-self.max_history:]:
+                messages.append(msg)
+
         messages.append({"role": "user", "content": cleaned_prompt})
 
         payload = {
@@ -177,11 +186,10 @@ class LocalLLMService:
             reply = (res_json.get("message") or {}).get("content", "").strip()
 
             if reply:
-                # Clean up any markdown speech formatting (asterisks, bullet points)
                 clean_reply = reply.replace("*", "").replace("#", "").strip()
-                # Update history
-                self.conversation_history.append({"role": "user", "content": cleaned_prompt})
-                self.conversation_history.append({"role": "assistant", "content": clean_reply})
+                if add_to_history:
+                    self.conversation_history.append({"role": "user", "content": cleaned_prompt})
+                    self.conversation_history.append({"role": "assistant", "content": clean_reply})
                 return clean_reply
             else:
                 return self._fallback_chat(cleaned_prompt)
@@ -199,12 +207,59 @@ class LocalLLMService:
             return "Hello Dhanush! I am online and ready to assist you."
         elif "how are you" in p_lower:
             return "I'm running smoothly with full GPU acceleration, ready for any question or task."
-        return f"I received your message: '{prompt}'. You can ask me general questions or switch to web, WhatsApp, Canva, or Instagram agents anytime."
+        return f"I understand your question about '{prompt}'. How can I help you further with that?"
 
     def clear_history(self):
         """Reset conversation memory."""
         self.conversation_history.clear()
 
 
+def sanitize_speech_response(text: str) -> str:
+    """
+    Ensure the avatar always speaks natural, clean conversational English.
+    Strips out raw JSON, python code, dictionary brackets, and internal prompt leaks.
+    """
+    import re
+    if not text:
+        return "I am here to help you."
+    cleaned = text.strip()
+
+    # If wrapped in JSON or contains JSON structure
+    if "{" in cleaned and "}" in cleaned:
+        start = cleaned.find("{")
+        end = cleaned.rfind("}")
+        try:
+            parsed = json.loads(cleaned[start:end+1])
+            if isinstance(parsed, dict):
+                for key in ["spoken_summary", "response", "message", "content", "summary", "answer"]:
+                    val = parsed.get(key)
+                    if isinstance(val, str) and val.strip():
+                        return sanitize_speech_response(val)
+        except Exception:
+            pass
+
+        # Regex fallback for JSON fields
+        m = re.search(r'"(?:spoken_summary|response|message|content|summary)"\s*:\s*"([^"]+)"', cleaned)
+        if m:
+            return sanitize_speech_response(m.group(1))
+
+        # If it's raw JSON without identifiable fields, strip the JSON block
+        cleaned = (cleaned[:start] + " " + cleaned[end+1:]).strip()
+
+    # Remove markdown code blocks and inline code
+    cleaned = re.sub(r'```[\s\S]*?```', '', cleaned)
+    cleaned = re.sub(r'`[^`]*`', '', cleaned)
+
+    # Clean markdown formatting characters
+    cleaned = cleaned.replace("*", "").replace("#", "").replace("_", " ").replace(">", "")
+    cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+
+    if not cleaned or cleaned.startswith("{"):
+        return "I am ready. How can I help you today?"
+    return cleaned
+
+
 # Global singleton instance
 local_llm_instance = LocalLLMService.get_instance()
+# Clear any polluted history on startup
+local_llm_instance.clear_history()

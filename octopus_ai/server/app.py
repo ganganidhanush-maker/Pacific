@@ -35,7 +35,7 @@ from octopus_ai.automations import create_default_registry, PreviewManager
 from octopus_ai.agent.agent import OctopusAgent
 from octopus_ai.engine.selenium_engine import BrowserEngine
 from octopus_ai.main import prepare_main_profile
-from server.local_llm_service import local_llm_instance
+from server.local_llm_service import local_llm_instance, sanitize_speech_response
 from octopus_ai.agent.orchestrator import master_orchestrator_instance
 from octopus_ai.agent.subagents.desktop_agent import desktop_agent_instance
 from octopus_ai.agent.subagents.research_agent import research_agent_instance
@@ -367,18 +367,34 @@ async def chat_endpoint(req: ChatRequest, background_tasks: BackgroundTasks):
     summary_text = ""
 
     if active_agent == "main":
-        # Full Multi-Agent Prompt Optimization & Task Decomposition
-        try:
-            plan = await master_orchestrator_instance.optimize_and_decompose(user_msg)
-            exec_res = await master_orchestrator_instance.execute_plan(plan, user_msg)
-            response_text = exec_res.get("spoken_response") or "I've organized the task across your sub-agents."
-            bullets = exec_res.get("summary_bullets", [])
-            if bullets:
-                summary_text = "\n".join(f"• {b}" for b in bullets)
-            triggered_action = {"agent": "main", "plan": plan, "results": exec_res.get("subagent_results")}
-        except Exception as orch_err:
+        # Check if the user message is an actionable automation task vs general conversation
+        is_actionable = any(kw in user_lower for kw in [
+            "whatsapp", "canva", "instagram", "broadcast", 
+            "ptm", "find file", "local file", "organize file", 
+            "move file", "touch file", "open canva", "open whatsapp", "open instagram",
+            "search google", "presentation deck", "create presentation"
+        ])
+
+        if is_actionable:
+            # Full Multi-Agent Prompt Optimization & Task Decomposition
+            try:
+                plan = await master_orchestrator_instance.optimize_and_decompose(user_msg)
+                exec_res = await master_orchestrator_instance.execute_plan(plan, user_msg)
+                raw_spoken = exec_res.get("spoken_response") or "I've organized the task across your sub-agents."
+                response_text = sanitize_speech_response(raw_spoken)
+                bullets = exec_res.get("summary_bullets", [])
+                if bullets:
+                    summary_text = "\n".join(f"• {b}" for b in bullets)
+                triggered_action = {"agent": "main", "plan": plan, "results": exec_res.get("subagent_results")}
+            except Exception as orch_err:
+                response_text = await local_llm_instance.generate_response(user_msg)
+                response_text = sanitize_speech_response(response_text)
+                triggered_action = {"agent": "main", "action": "fallback_chat"}
+        else:
+            # Direct conversational response to what the user wants!
             response_text = await local_llm_instance.generate_response(user_msg)
-            triggered_action = {"agent": "main", "action": "fallback_chat"}
+            response_text = sanitize_speech_response(response_text)
+            triggered_action = {"agent": "main", "action": "chat"}
 
     elif active_agent == "desktop":
         # Local Desktop File & OS Operations
@@ -466,6 +482,7 @@ async def chat_endpoint(req: ChatRequest, background_tasks: BackgroundTasks):
         background_tasks.add_task(run_web_task, query)
 
     # 3. SYNTHESIZE SPEECH USING DHANUSH'S CLONED VOICE
+    response_text = sanitize_speech_response(response_text)
     audio_url = await generate_speech_file(response_text)
 
     return {
