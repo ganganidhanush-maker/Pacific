@@ -199,7 +199,18 @@ class LocalLLMService:
             return self._fallback_chat(cleaned_prompt)
 
     def _fallback_chat(self, prompt: str) -> str:
-        """Fallback conversational responses if local LLM is temporarily unreachable."""
+        """Fallback to Groq Cloud LLM, or conversational response if unreachable."""
+        try:
+            from octopus_ai.agent.groq_llm import GroqLLM
+            groq = GroqLLM()
+            if groq.is_available:
+                resp = groq.chat(prompt, system_prompt=SYSTEM_PROMPT)
+                content = resp.get("content") or resp.get("response", "")
+                if content:
+                    return content.strip()
+        except Exception as e:
+            logger.debug(f"[LocalLLM] Groq fallback notice: {e}")
+
         p_lower = prompt.lower()
         if any(w in p_lower for w in ["who are you", "what are you"]):
             return "I am Octopus AI, your personal desktop AI assistant running locally on your computer."

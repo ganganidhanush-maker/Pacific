@@ -153,7 +153,12 @@ class DesktopAgent:
         try:
             if not os.path.exists(target_path):
                 return {"success": False, "error": f"File {target_path} not found"}
-            os.startfile(target_path)
+            if hasattr(os, "startfile"):
+                os.startfile(target_path)
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", target_path])
+            else:
+                subprocess.Popen(["xdg-open", target_path])
             return {"success": True, "message": f"Opened {os.path.basename(target_path)}"}
         except Exception as e:
             return {"success": False, "error": str(e)}

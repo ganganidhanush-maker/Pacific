@@ -479,7 +479,6 @@ async def chat_endpoint(req: ChatRequest, background_tasks: BackgroundTasks):
             response_text = f"Opening Google Chrome to search for '{query}'."
             triggered_action = {"agent": "web", "query": query}
             background_tasks.add_task(run_web_task, query)
-        background_tasks.add_task(run_web_task, query)
 
     # 3. SYNTHESIZE SPEECH USING DHANUSH'S CLONED VOICE
     response_text = sanitize_speech_response(response_text)
