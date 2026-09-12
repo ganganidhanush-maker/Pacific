@@ -32,10 +32,12 @@ if sys.stderr and hasattr(sys.stderr, "reconfigure"):
     except Exception:
         pass
 
-# Ensure repository root is in sys.path
-repo_root = Path(__file__).resolve().parent.parent
-if str(repo_root) not in sys.path:
-    sys.path.insert(0, str(repo_root))
+# Ensure repository root and package directory are in sys.path
+this_dir = Path(__file__).resolve().parent
+parent_dir = this_dir.parent
+for p in [str(this_dir), str(parent_dir)]:
+    if p not in sys.path:
+        sys.path.insert(0, p)
 
 # Load environment variables
 load_dotenv()
@@ -79,8 +81,14 @@ def prepare_main_profile() -> tuple[str, str]:
     Uses a dedicated AutomationData directory that retains all logins (WhatsApp, Instagram, Canva)
     permanently across reruns without overwriting them or causing Chrome DevTools conflicts.
     """
+    chrome_data_env = os.environ.get("CHROME_USER_DATA_DIR")
+    if chrome_data_env:
+        os.makedirs(chrome_data_env, exist_ok=True)
+        return chrome_data_env, "Configured Chrome Data"
+
     local_app_data = os.environ.get("LOCALAPPDATA", "")
     if not local_app_data:
+        os.makedirs(".chrome_profile", exist_ok=True)
         return ".chrome_profile", "Default Profile"
 
     dst_root = os.path.join(local_app_data, "Google", "Chrome", "AutomationData")

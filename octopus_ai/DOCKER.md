@@ -22,46 +22,45 @@ docker-compose logs -f
 docker-compose down
 
 # Stop and remove volumes (clears Chrome data)
-docker-compose down -v
+docker compose down -v
 ```
+
+Once running, simply open **http://localhost:8000** on your host computer to interact with the full Desktop Avatar, 9-dots menu, and all 5 agents!
 
 ### Option 2: Using Docker Directly
 
 ```bash
 # Build the image
-docker build -t octopus-ai-agent .
+docker build -t pacific-octopus-ai .
 
-# Run the container with virtual display
+# Run the container with port 8000 mapped
 docker run -it --rm \
+  -p 8000:8000 \
   -e DISPLAY=:99 \
-  -e CHROME_BIN=/usr/bin/google-chrome \
-  -e CHROMEDRIVER_PATH=/usr/local/bin/chromedriver \
+  -e HOST=0.0.0.0 \
+  -e PORT=8000 \
   -v chrome-data:/app/chrome-data \
-  octopus-ai-agent
-
-# Or run with custom command
-docker run -it --rm \
-  -e DISPLAY=:99 \
-  -v $(pwd):/app \
-  octopus-ai-agent python example_usage.py
+  pacific-octopus-ai
 ```
 
 ## Environment Variables
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `DISPLAY` | Virtual display for headless browser | `:99` |
-| `CHROME_BIN` | Path to Chrome binary | `/usr/bin/google-chrome` |
-| `CHROMEDRIVER_PATH` | Path to ChromeDriver | `/usr/local/bin/chromedriver` |
-| `PYTHONUNBUFFERED` | Python output buffering | `1` |
-| `OPENAI_API_KEY` | OpenAI API key (for LLM integration) | - |
-| `ANTHROPIC_API_KEY` | Anthropic API key (alternative LLM) | - |
+| `HOST` | Server bind address | `0.0.0.0` |
+| `PORT` | Server port | `8000` |
+| `DISPLAY` | Virtual display for headless browser (Xvfb) | `:99` |
+| `BROWSER_HEADLESS` | Run Chrome in headless automation mode | `true` |
+| `IN_DOCKER` | Indicates containerized execution | `1` |
+| `GROQ_API_KEY` | Optional Groq API key for cloud LLM reasoning | - |
+| `GROQ_MODEL` | Groq model selection | `llama-3.3-70b-versatile` |
 
 ## Volumes
 
 | Volume | Purpose |
 |--------|---------|
-| `chrome-data` | Persists Chrome user data (cookies, sessions, cache) |
+| `chrome-data` | Persists Chrome user data (cookies, active sessions, cache) |
+| `audio_cache` | Persists synthesized audio speech files |
 
 ## Ports
 

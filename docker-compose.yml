@@ -1,11 +1,11 @@
 version: '3.8'
 
 services:
-  octopus-ai:
+  pacific-octopus-ai:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: octopus-ai-agent
+    container_name: pacific-octopus-ai
     ports:
       - "8000:8000"
     environment:
@@ -14,10 +14,10 @@ services:
       - BROWSER_HEADLESS=true
       - IN_DOCKER=1
       - DISPLAY=:99
-      - GROQ_API_KEY=${GROQ_API_KEY:-}
-      - GROQ_MODEL=${GROQ_MODEL:-llama-3.3-70b-versatile}
+      - GROQ_API_KEY=${GROQ_API_KEY:+}
+      - GROQ_MODEL=${GROQ_MODEL-llama-3.3-70b-versatile}
     volumes:
-      - ./assets/audio_cache:/app/assets/audio_cache
+      - ./octopus_ai/assets/audio_cache:/app/octopus_ai/assets/audio_cache
       - chrome-data:/app/chrome-data
     working_dir: /app
     ipc: host

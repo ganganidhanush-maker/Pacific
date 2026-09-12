@@ -59,4 +59,8 @@ docker-compose.override.yml
 .dockerenv
 
 # Browser profile and cache
-.chrome_profile/
+.chrome_profile/
+chrome-data/
+octopus_ai/assets/audio_cache/
+octopus_ai/scratch/
+scratch/

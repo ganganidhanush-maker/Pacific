@@ -1,10 +1,9 @@
-# Octopus AI Agent - Production Dockerfile
+# Pacific / Octopus AI - Production Multi-Agent System Dockerfile
 # Python 3.11 with Google Chrome, FFmpeg, Xvfb and Audio Synthesis
 
-FROM python:3.11-slim
+FROM ython:3.11-slim
 
-# Environment configuration
-ENV PYTHONDONTWRITEBYTECODE=1 \
+ENV PYTHONDONTWRITEBY]CODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
@@ -16,7 +15,6 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     CHROME_USER_DATA_DIR=/app/chrome-data \
     DISPLAY=:99
 
-# Install system dependencies (Chrome requirements, Xvfb virtual display, FFmpeg for audio/video)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     wget \
     curl \
@@ -42,7 +40,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     xdg-utils \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Google Chrome Stable via modern keyring
 RUN mkdir -p /etc/apt/keyrings \
     && curl -fsSL https://dl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /etc/apt/keyrings/google-chrome.gpg \
     && echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main" > /etc/apt/sources.list.d/google-chrome.list \
@@ -50,24 +47,17 @@ RUN mkdir -p /etc/apt/keyrings \
     && apt-get install -y --no-install-recommends google-chrome-stable \
     && rm -rf /var/lib/apt/lists/*
 
-# Set working directory
 WORKDIR /app
 
-# Copy requirements and install Python dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application source code
 COPY . .
 
-# Ensure data and cache directories exist with write permissions
-RUN mkdir -p /app/chrome-data /app/assets/audio_cache && chmod -R 777 /app/chrome-data /app/assets/audio_cache
+RUN mkdir -p /app/chrome-data /app/octopus_ai/assets/audio_cache && chmod -R 777 /app/chrome-data /app/octopus_ai/assets/audio_cache
+RUN chmod +x /app/octopus_ai/entrypoint.sh
 
-# Make entrypoint executable
-RUN chmod +x /app/entrypoint.sh
-
-# Expose API and UI port
 EXPOSE 8000
 
-ENTRYPOINT ["/app/entrypoint.sh"]
+ENTRYPOINT ["/app/octopus_ai/entrypoint.sh"]
 CMD []
