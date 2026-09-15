@@ -207,6 +207,69 @@ class TestIntentAndDisambiguation(unittest.TestCase):
         self.assertTrue(data['success'])
         self.assertEqual(data['inactivity_limit_seconds'], 25.0)
 
+    def test_avatar_mode_endpoints(self):
+        client = TestClient(app)
+        # Test GET /api/avatar/mode
+        res = client.get('/api/avatar/mode')
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertIn('mode', data)
+        self.assertIn(data['mode'], ['3d_vrm', 'video'])
+
+        # Test POST /api/avatar/mode valid
+        res_post = client.post('/api/avatar/mode', json={'mode': 'video'})
+        self.assertEqual(res_post.status_code, 200)
+        self.assertEqual(res_post.json()['mode'], 'video')
+
+        res_get = client.get('/api/avatar/mode')
+        self.assertEqual(res_get.json()['mode'], 'video')
+
+        # Switch back to 3d_vrm
+        res_post2 = client.post('/api/avatar/mode', json={'mode': '3d_vrm'})
+        self.assertEqual(res_post2.status_code, 200)
+        self.assertEqual(res_post2.json()['mode'], '3d_vrm')
+
+        # Test invalid mode
+        res_bad = client.post('/api/avatar/mode', json={'mode': 'invalid_mode'})
+        self.assertEqual(res_bad.status_code, 400)
+
+    def test_avatar_motion_profile_endpoint(self):
+        client = TestClient(app)
+        res = client.get('/api/avatar/motion-profile')
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertIn('physics_and_procedural', data)
+        self.assertIn('audio_viseme_mapping', data)
+
+    def test_avatar_models_and_upload(self):
+        client = TestClient(app)
+        res = client.get('/api/avatar/models')
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertIn('models', data)
+
+        # Test invalid upload extension
+        res_bad_file = client.post(
+            '/api/avatar/upload-vrm',
+            files={'file': ('fake.txt', b'dummy content', 'text/plain')}
+        )
+        self.assertEqual(res_bad_file.status_code, 400)
+
+        # Test valid VRM upload
+        res_upload = client.post(
+            '/api/avatar/upload-vrm',
+            files={'file': ('test_model.vrm', b'fake vrm bytes', 'application/octet-stream')}
+        )
+        self.assertEqual(res_upload.status_code, 200)
+        data_up = res_upload.json()
+        self.assertTrue(data_up['success'])
+        self.assertEqual(data_up['filename'], 'test_model.vrm')
+
+        # Clean up test uploaded model
+        test_file = repo_dir / 'assets' / 'avatars' / 'test_model.vrm'
+        if test_file.exists():
+            test_file.unlink()
+
 
 if __name__ == '__main__':
     unittest.main()

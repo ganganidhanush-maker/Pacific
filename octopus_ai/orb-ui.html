@@ -4,6 +4,15 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Octopus AI — Desktop Agent Tool</title>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/",
+    "@pixiv/three-vrm": "https://cdn.jsdelivr.net/npm/@pixiv/three-vrm@2.0.6/lib/three-vrm.module.js"
+  }
+}
+</script>
 <style>
   :root{
     --bg: #ffffff;
@@ -259,6 +268,177 @@
   .avatar-video.video-hidden{
     opacity:0;
     pointer-events:none;
+  }
+  .avatar-video.video-disabled{
+    display:none !important;
+  }
+
+  /* 3D Digital Human (VRM / WebGL) Canvas */
+  .avatar-canvas{
+    position:absolute;
+    bottom:0;
+    left:50%;
+    transform:translateX(-50%);
+    width:100%;
+    height:100%;
+    pointer-events:auto;
+    display:none;
+    z-index:5;
+    background:transparent;
+    mask-image: linear-gradient(to bottom, rgba(0,0,0,1) 82%, rgba(0,0,0,0) 100%);
+    -webkit-mask-image: linear-gradient(to bottom, rgba(0,0,0,1) 82%, rgba(0,0,0,0) 100%);
+  }
+  .avatar-canvas.active{
+    display:block;
+  }
+
+  /* Floating 3D Human Status Badge */
+  .vrm-badge{
+    position:absolute;
+    top:14px;
+    left:50%;
+    transform:translateX(-50%);
+    background:rgba(255,255,255,0.88);
+    backdrop-filter:blur(8px);
+    border:1px solid var(--line);
+    border-radius:20px;
+    padding:4px 12px;
+    font-size:11px;
+    font-weight:600;
+    color:var(--muted);
+    display:flex;
+    align-items:center;
+    gap:6px;
+    z-index:10;
+    pointer-events:none;
+    box-shadow:0 2px 8px rgba(0,0,0,0.05);
+    transition:opacity 0.2s ease;
+  }
+  .vrm-badge .live-dot{
+    width:6px;
+    height:6px;
+    border-radius:50%;
+    background:var(--c4);
+    animation:liveGlow 1.6s infinite;
+  }
+  @keyframes liveGlow{
+    0%,100%{ box-shadow:0 0 0 0 rgba(52,168,83,0.5); }
+    50%{ box-shadow:0 0 0 5px rgba(52,168,83,0); }
+  }
+
+  /* Interactive VRM Drag-and-Drop Overlay */
+  .vrm-drop-overlay{
+    position:absolute;
+    inset:8px;
+    border:2px dashed var(--c1);
+    border-radius:24px;
+    background:rgba(66,133,244,0.08);
+    backdrop-filter:blur(4px);
+    display:none;
+    align-items:center;
+    justify-content:center;
+    flex-direction:column;
+    gap:6px;
+    font-size:13px;
+    font-weight:600;
+    color:var(--c1);
+    z-index:25;
+    pointer-events:none;
+    animation:fadeIn .15s ease;
+  }
+  .vrm-drop-overlay.drag-over{
+    display:flex;
+  }
+
+  /* Avatar Engine Mode Toggle Button in Search Bar */
+  .avatar-mode-btn{
+    border:1px solid var(--line);
+    background:#f8f9fa;
+    color:var(--c2);
+    font-size:11px;
+    font-weight:700;
+    padding:5px 9px;
+    border-radius:14px;
+    cursor:pointer;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    gap:4px;
+    transition:all .18s ease;
+    user-select:none;
+  }
+  .avatar-mode-btn:hover{
+    background:#f3e8fd;
+    border-color:var(--c2);
+    box-shadow:0 2px 8px rgba(155,114,203,0.25);
+  }
+  .avatar-mode-btn.video-mode{
+    color:var(--muted);
+    background:#f1f3f4;
+    border-color:var(--line);
+  }
+  .avatar-mode-btn.video-mode:hover{
+    background:#e8eaed;
+    color:var(--ink);
+  }
+
+  /* Settings Modal Avatar Engine Controls */
+  .settings-choice-group{
+    display:flex;
+    gap:8px;
+    margin:8px 0 12px 0;
+  }
+  .settings-choice-btn{
+    flex:1;
+    padding:8px 12px;
+    border-radius:10px;
+    border:1px solid var(--line);
+    background:#f8f9fa;
+    color:var(--muted);
+    font-size:12px;
+    font-weight:600;
+    cursor:pointer;
+    transition:all .15s ease;
+  }
+  .settings-choice-btn:hover{
+    background:var(--card-hover);
+    color:var(--ink);
+  }
+  .settings-choice-btn.active{
+    background:#e8f0fe;
+    color:var(--c1);
+    border-color:var(--c1);
+  }
+  .upload-vrm-label{
+    display:inline-flex;
+    align-items:center;
+    gap:6px;
+    padding:7px 12px;
+    background:#f1f3f4;
+    color:var(--ink);
+    border-radius:10px;
+    font-size:12px;
+    font-weight:600;
+    cursor:pointer;
+    transition:background .15s ease;
+  }
+  .upload-vrm-label:hover{
+    background:#e2e5e8;
+  }
+  .reload-vrm-btn{
+    padding:7px 12px;
+    background:transparent;
+    border:1px solid var(--line);
+    border-radius:10px;
+    font-size:12px;
+    font-weight:600;
+    color:var(--muted);
+    cursor:pointer;
+    transition:all .15s ease;
+  }
+  .reload-vrm-btn:hover{
+    background:var(--card-hover);
+    color:var(--ink);
   }
 
   /* ---------- ELONGATED SEARCH BAR (Matching Sketch) ---------- */
@@ -543,6 +723,18 @@
   <div class="stage">
     <!-- FRAMELESS FREE-STANDING VIDEO AVATAR (NO GHOSTING, PURE WHITE BLEND) -->
     <div class="model-wrapper" id="modelWrapper">
+      <!-- 3D DIGITAL HUMAN / VRM CANVAS (THREE.JS + @PIXIV/THREE-VRM) -->
+      <div class="vrm-badge" id="vrmBadge" style="display:none;">
+        <span class="live-dot"></span>
+        <span id="vrmBadgeText">3D Digital Human (Dhanush)</span>
+      </div>
+      <div class="vrm-drop-overlay" id="vrmDropOverlay">
+        <div style="font-size:26px;">📥</div>
+        <div>Drop Dhanush .vrm File Here</div>
+        <div style="font-size:11px; opacity:0.8;">Instant load & persist to assets/avatars/</div>
+      </div>
+      <canvas id="vrmCanvas" class="avatar-canvas"></canvas>
+
       <!-- BASE IDLE LAYER: 100% Closed Mouth Natural Presence from Normal_Waiting_DO____Keep_t -->
       <video class="avatar-video" id="avatarVideoIdle" src="/assets/videos/idle.mp4" autoplay loop muted playsinline preload="auto"></video>
       <!-- DYNAMIC ACTION LAYER: Real-time Audio-Reactive Lip Sync Overlay -->
@@ -564,6 +756,7 @@
 
         <input type="text" id="taskInput" placeholder="Explain your goal (e.g. 'I am Saiteja, send PTM notice to groups') or /desktop, /web..." autocomplete="off" />
         <div class="bar-buttons">
+          <button class="avatar-mode-btn" id="avatarModeBtn" title="Avatar Engine: 3D Digital Human (Click to switch to Studio Video)">3D Avatar</button>
           <button class="lang-toggle-btn" id="langToggleBtn" title="Language: English (Click to toggle Telugu)">EN</button>
           <button class="mic-btn" id="micBtn" title="Speak to Dhanush">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -609,9 +802,32 @@
       <div><strong>Dhanush AI Desktop Agent</strong></div>
       <div>• Local LLM: Ollama (llama3.2:latest) with GPU Acceleration</div>
       <div>• Voice: Dhanush Cloned Neural Voice (Resemble AI Chatterbox)</div>
-      <div>• Video Mode: Frameless Seamless Studio Model (Pure White)</div>
       <div>• Active Agents: Main (Orchestrator), Web (WhatsApp/Canva/IG), Desktop (Files), Research, Chatbot</div>
       <div>• Switch Commands: /main, /web, /desktop, /research, /chatbot</div>
+    </div>
+
+    <!-- AVATAR ENGINE SETTINGS -->
+    <div style="margin-top:8px; padding-top:12px; border-top:1px solid var(--line);">
+      <div style="font-size:13px; font-weight:700; color:var(--ink); margin-bottom:8px; display:flex; justify-content:space-between; align-items:center;">
+        <span>Avatar Display Engine</span>
+        <span id="settingsActiveModeBadge" style="font-size:11px; background:#e8f0fe; color:var(--c1); padding:2px 8px; border-radius:10px;">3D Digital Human</span>
+      </div>
+      <div class="settings-choice-group">
+        <button class="settings-choice-btn active" id="btnMode3D">3D Digital Human (VRM)</button>
+        <button class="settings-choice-btn" id="btnModeVideo">Studio Video</button>
+      </div>
+      <div id="vrmSettingsSection">
+        <div style="font-size:12px; color:var(--muted); margin-bottom:8px;">
+          Active 3D Model: <strong id="currentVrmModelName">Procedural Avatar (Drop VRM to load)</strong>
+        </div>
+        <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+          <label class="upload-vrm-label" for="vrmFileInput">
+            📁 Upload .vrm File
+            <input type="file" id="vrmFileInput" accept=".vrm" style="display:none;" />
+          </label>
+          <button class="reload-vrm-btn" id="reloadVrmBtn">🔄 Refresh Model</button>
+        </div>
+      </div>
     </div>
   </div>
 </div>
@@ -807,10 +1023,14 @@ const agentConfigs = {
   }
 };
 
-// Deterministic Video State Transition (Zero Blank Screen)
+// Deterministic Video & 3D Avatar State Transition
 function switchVideoState(newState) {
   if (currentState === newState) return;
   currentState = newState;
+
+  if (window.vrmAvatarEngine && typeof window.vrmAvatarEngine.setState === 'function') {
+    window.vrmAvatarEngine.setState(newState);
+  }
 
   if (newState === 'thinking') {
     avatarEngine.setState('thinking');
@@ -827,7 +1047,7 @@ function switchVideoState(newState) {
   }
 }
 
-// Audio-Reactive Lip Sync Engine with Pause Sensing & Cadence Scaling
+// Audio-Reactive Lip Sync Engine with Pause Sensing & Formant Visemes
 let audioCtx = null;
 let audioAnalyser = null;
 let audioSourceNode = null;
@@ -844,10 +1064,16 @@ function initWebAudioGraph() {
     if (audioCtx && !audioSourceNode) {
       audioSourceNode = audioCtx.createMediaElementSource(avatarAudio);
       audioAnalyser = audioCtx.createAnalyser();
-      audioAnalyser.fftSize = 256;
+      audioAnalyser.fftSize = 1024;
+      audioAnalyser.smoothingTimeConstant = 0.75;
       audioSourceNode.connect(audioAnalyser);
       audioAnalyser.connect(audioCtx.destination);
       webAudioConnected = true;
+      window.audioCtx = audioCtx;
+      window.audioAnalyser = audioAnalyser;
+      if (window.vrmAvatarEngine && typeof window.vrmAvatarEngine.setAudioAnalyser === 'function') {
+        window.vrmAvatarEngine.setAudioAnalyser(audioAnalyser, audioCtx);
+      }
     }
   } catch (err) {
     console.warn("Web Audio initialization notice:", err);
@@ -940,6 +1166,9 @@ function playAgentSpeech(audioUrl, text) {
   const criteria = words.length <= 5 ? { tempo: 'fast' } : {};
 
   // IMMEDIATELY activate the voice frame so he talks right away!
+  if (window.vrmAvatarEngine && typeof window.vrmAvatarEngine.onSpeechStart === 'function') {
+    window.vrmAvatarEngine.onSpeechStart(text);
+  }
   avatarEngine.setState('speaking', { ...criteria, immediate: true });
   statusDot.className = 'status-dot speaking';
   avatarEngine.setMouthVisible(true);
@@ -947,6 +1176,9 @@ function playAgentSpeech(audioUrl, text) {
   if (!audioUrl || !avatarAudio) {
     const displayDuration = Math.min(Math.max(words.length * 400, 2500), 7000);
     setTimeout(() => {
+      if (window.vrmAvatarEngine && typeof window.vrmAvatarEngine.onSpeechEnd === 'function') {
+        window.vrmAvatarEngine.onSpeechEnd();
+      }
       switchVideoState('idle');
       statusText.textContent = 'Ready';
     }, displayDuration);
@@ -965,6 +1197,9 @@ function playAgentSpeech(audioUrl, text) {
 
     avatarAudio.onended = () => {
       if (lipSyncAnimFrame) cancelAnimationFrame(lipSyncAnimFrame);
+      if (window.vrmAvatarEngine && typeof window.vrmAvatarEngine.onSpeechEnd === 'function') {
+        window.vrmAvatarEngine.onSpeechEnd();
+      }
       avatarEngine.setMouthVisible(false);
       avatarEngine.setPlaybackRate(1.0);
       switchVideoState('idle');
@@ -974,6 +1209,9 @@ function playAgentSpeech(audioUrl, text) {
     avatarAudio.onerror = (e) => {
       console.warn('Audio playback note:', e);
       if (lipSyncAnimFrame) cancelAnimationFrame(lipSyncAnimFrame);
+      if (window.vrmAvatarEngine && typeof window.vrmAvatarEngine.onSpeechEnd === 'function') {
+        window.vrmAvatarEngine.onSpeechEnd();
+      }
       setTimeout(() => {
         switchVideoState('idle');
         statusText.textContent = 'Ready';
@@ -1276,6 +1514,795 @@ async function checkLiveUpdates() {
 }
 
 setInterval(checkLiveUpdates, 2000);
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { VRMLoaderPlugin, VRMUtils } from '@pixiv/three-vrm';
+
+/* =========================================================================
+   PERSISTENT 3D DIGITAL HUMAN / VRM ENGINE (DHANUSH)
+   - Real-Time Three.js WebGL Viewport
+   - @pixiv/three-vrm 2.0 Ingestion with Bone Normalization
+   - Audio Formant Spectral FFT Viseme Lip-Sync (aa, ih, ou, ee, oh)
+   - Procedural Breathing, Poisson Blinking, Gaze Tracking, Speech Nods
+   - Stylized Procedural Fallback Avatar (100% operational without assets)
+   - Drag-and-Drop VRM Ingestion with Backend Persistence
+   - Seamless Dual-Mode Switcher (3D Digital Human ⇄ Studio Video)
+========================================================================= */
+
+class VRMAvatarEngine {
+  constructor() {
+    this.canvas = document.getElementById('vrmCanvas');
+    this.wrapper = document.getElementById('modelWrapper');
+    this.badge = document.getElementById('vrmBadge');
+    this.badgeText = document.getElementById('vrmBadgeText');
+    this.dropOverlay = document.getElementById('vrmDropOverlay');
+    this.modeBtn = document.getElementById('avatarModeBtn');
+    this.btnMode3D = document.getElementById('btnMode3D');
+    this.btnModeVideo = document.getElementById('btnModeVideo');
+    this.activeBadge = document.getElementById('settingsActiveModeBadge');
+    this.modelNameLabel = document.getElementById('currentVrmModelName');
+    this.vrmFileInput = document.getElementById('vrmFileInput');
+    this.reloadVrmBtn = document.getElementById('reloadVrmBtn');
+
+    this.videoIdle = document.getElementById('avatarVideoIdle');
+    this.videoAction = document.getElementById('avatarVideoAction');
+
+    this.mode = '3d_vrm'; // '3d_vrm' or 'video'
+    this.state = 'idle';  // 'idle', 'thinking', 'speaking'
+    this.isSpeaking = false;
+    this.speechText = '';
+
+    // Three.js instances
+    this.scene = null;
+    this.camera = null;
+    this.renderer = null;
+    this.clock = new THREE.Clock();
+
+    // VRM & Procedural instances
+    this.currentVrm = null;
+    this.proceduralAvatar = null;
+    this.loadedModelName = null;
+
+    // Web Audio Analyser
+    this.audioAnalyser = window.audioAnalyser || null;
+    this.audioCtx = window.audioCtx || null;
+    this.freqData = new Uint8Array(512);
+    this.timeData = new Uint8Array(512);
+
+    // Mouse Gaze Tracking
+    this.mouseTarget = { x: 0, y: 0 };
+    this.mouseCurrent = { x: 0, y: 0 };
+
+    // Procedural Motion Settings
+    this.motionProfile = {
+      breathing: {
+        rate_hz: 0.31,
+        amplitude_chest: 0.018,
+        amplitude_spine: 0.012,
+        head_sway_rad: 0.008
+      },
+      blinking: {
+        mean_interval_sec: 3.8,
+        interval_jitter_sec: 1.2,
+        close_duration_sec: 0.08,
+        hold_duration_sec: 0.04,
+        open_duration_sec: 0.10,
+        double_blink_probability: 0.18
+      },
+      gaze: {
+        tracking_speed: 4.5,
+        max_horizontal_rad: 0.35,
+        max_vertical_rad: 0.25,
+        eye_lead_factor: 1.6,
+        neck_follow_factor: 0.35
+      },
+      speech_gestures: {
+        head_nod_amplitude: 0.045,
+        head_nod_frequency_hz: 1.8,
+        lateral_emphasis_tilt: 0.028
+      },
+      thinking_pose: {
+        head_tilt_roll: 0.065,
+        head_tilt_pitch: -0.035
+      },
+      viseme_bands: {
+        aa: { f1: [600, 950], f2: [1000, 1500], weight: 1.15 },
+        ih: { f1: [250, 480], f2: [1900, 2600], weight: 1.0 },
+        ou: { f1: [280, 520], f2: [700, 1100], weight: 1.1 },
+        ee: { f1: [350, 650], f2: [1600, 2200], weight: 1.05 },
+        oh: { f1: [450, 750], f2: [800, 1300], weight: 1.1 }
+      }
+    };
+
+    // Animation & Blink timers
+    this.breathTime = 0;
+    this.speechTime = 0;
+    this.nextBlinkTime = 3.0;
+    this.blinkTimer = 0;
+    this.isBlinking = false;
+    this.blinkWeight = 0;
+
+    // Smoothed Viseme Weights
+    this.visemeWeights = { aa: 0, ih: 0, ou: 0, ee: 0, oh: 0 };
+
+    this.init();
+  }
+
+  async init() {
+    if (!this.canvas) return;
+
+    try {
+      this.initThree();
+      this.buildStudioLights();
+      this.buildProceduralAvatar();
+      this.setupEventListeners();
+      await this.loadMotionProfile();
+      await this.initMode();
+      await this.discoverAndLoadModel();
+
+      this.animate();
+      console.log('[VRMAvatarEngine] Initialized successfully with 60 FPS WebGL renderer.');
+    } catch (err) {
+      console.warn('[VRMAvatarEngine] WebGL initialization notice:', err);
+      this.setMode('video');
+    }
+  }
+
+  initThree() {
+    const width = this.canvas.clientWidth || 700;
+    const height = this.canvas.clientHeight || 500;
+
+    this.scene = new THREE.Scene();
+
+    this.camera = new THREE.PerspectiveCamera(28, width / height, 0.1, 20.0);
+    // Position camera to frame the avatar bust seated cleanly into the search bar
+    this.camera.position.set(0, 1.40, 1.25);
+    this.camera.lookAt(0, 1.35, 0);
+
+    this.renderer = new THREE.WebGLRenderer({
+      canvas: this.canvas,
+      alpha: true,
+      antialias: true,
+      powerPreference: 'high-performance'
+    });
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    this.renderer.setSize(width, height, false);
+    this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+
+    // Auto resize observer
+    const ro = new ResizeObserver(() => this.onResize());
+    ro.observe(this.canvas);
+    window.addEventListener('resize', () => this.onResize());
+  }
+
+  onResize() {
+    if (!this.renderer || !this.camera || !this.canvas) return;
+    const width = this.canvas.clientWidth || 700;
+    const height = this.canvas.clientHeight || 500;
+    this.camera.aspect = width / height;
+    this.camera.updateProjectionMatrix();
+    this.renderer.setSize(width, height, false);
+  }
+
+  buildStudioLights() {
+    // Studio 3-point lighting matching Dhanush's video takes
+    const ambientLight = new THREE.AmbientLight(0xffffff, 1.25);
+    this.scene.add(ambientLight);
+
+    const keyLight = new THREE.DirectionalLight(0xfff7ed, 1.8);
+    keyLight.position.set(1.2, 2.2, 1.8);
+    this.scene.add(keyLight);
+
+    const fillLight = new THREE.DirectionalLight(0xdbeafe, 0.9);
+    fillLight.position.set(-1.4, 1.2, 1.2);
+    this.scene.add(fillLight);
+
+    const rimLight = new THREE.DirectionalLight(0x93c5fd, 1.4);
+    rimLight.position.set(0.0, 2.8, -1.8);
+    this.scene.add(rimLight);
+  }
+
+  buildProceduralAvatar() {
+    // Stylized, procedural 3D humanoid avatar bust for instant 60 FPS operation
+    const root = new THREE.Group();
+    root.position.set(0, 0, 0);
+
+    const skinMat = new THREE.MeshStandardMaterial({
+      color: 0xc68b59,
+      roughness: 0.55,
+      metalness: 0.04
+    });
+    const shirtMat = new THREE.MeshStandardMaterial({
+      color: 0x1e293b,
+      roughness: 0.8
+    });
+    const hairMat = new THREE.MeshStandardMaterial({
+      color: 0x141416,
+      roughness: 0.95
+    });
+
+    // Torso / Shoulders
+    const torsoPivot = new THREE.Group();
+    torsoPivot.position.set(0, 0.78, 0);
+    const torsoGeo = new THREE.CylinderGeometry(0.24, 0.28, 0.65, 32);
+    const torsoMesh = new THREE.Mesh(torsoGeo, shirtMat);
+    torsoMesh.scale.set(1.4, 1.0, 0.75);
+    torsoMesh.position.set(0, 0.32, 0);
+    torsoPivot.add(torsoMesh);
+
+    // Collar
+    const collarGeo = new THREE.CylinderGeometry(0.12, 0.14, 0.08, 24);
+    const collarMesh = new THREE.Mesh(collarGeo, shirtMat);
+    collarMesh.position.set(0, 0.64, 0.02);
+    torsoPivot.add(collarMesh);
+
+    // Neck Pivot
+    const neckPivot = new THREE.Group();
+    neckPivot.position.set(0, 0.64, 0);
+    const neckGeo = new THREE.CylinderGeometry(0.065, 0.075, 0.16, 24);
+    const neckMesh = new THREE.Mesh(neckGeo, skinMat);
+    neckMesh.position.set(0, 0.08, 0);
+    neckPivot.add(neckMesh);
+    torsoPivot.add(neckPivot);
+
+    // Head Pivot
+    const headPivot = new THREE.Group();
+    headPivot.position.set(0, 0.16, 0);
+
+    // Cranium / Face
+    const headGeo = new THREE.SphereGeometry(0.125, 32, 32);
+    const headMesh = new THREE.Mesh(headGeo, skinMat);
+    headMesh.scale.set(0.96, 1.15, 1.02);
+    headMesh.position.set(0, 0.12, 0);
+    headPivot.add(headMesh);
+
+    // Hair
+    const hairGeo = new THREE.SphereGeometry(0.134, 32, 24, 0, Math.PI * 2, 0, Math.PI * 0.58);
+    const hairMesh = new THREE.Mesh(hairGeo, hairMat);
+    hairMesh.position.set(0, 0.16, -0.01);
+    headPivot.add(hairMesh);
+
+    // Eyes
+    const eyeWhiteMat = new THREE.MeshBasicMaterial({ color: 0xf8f9fa });
+    const pupilMat = new THREE.MeshBasicMaterial({ color: 0x1f1917 });
+
+    const createEye = (xPos) => {
+      const eyeGroup = new THREE.Group();
+      eyeGroup.position.set(xPos, 0.135, 0.11);
+
+      const scleraGeo = new THREE.SphereGeometry(0.019, 16, 16);
+      const scleraMesh = new THREE.Mesh(scleraGeo, eyeWhiteMat);
+      eyeGroup.add(scleraMesh);
+
+      const pupilGeo = new THREE.SphereGeometry(0.009, 16, 16);
+      const pupilMesh = new THREE.Mesh(pupilGeo, pupilMat);
+      pupilMesh.position.set(0, 0, 0.013);
+      eyeGroup.add(pupilMesh);
+
+      const eyelidGeo = new THREE.BoxGeometry(0.042, 0.035, 0.02);
+      const eyelidMesh = new THREE.Mesh(eyelidGeo, skinMat);
+      eyelidMesh.position.set(0, 0.024, 0.008);
+      eyeGroup.add(eyelidMesh);
+
+      return { group: eyeGroup, eyelid: eyelidMesh };
+    };
+
+    const leftEye = createEye(-0.046);
+    const rightEye = createEye(0.046);
+    headPivot.add(leftEye.group);
+    headPivot.add(rightEye.group);
+
+    // Nose
+    const noseGeo = new THREE.ConeGeometry(0.016, 0.045, 16);
+    const noseMesh = new THREE.Mesh(noseGeo, skinMat);
+    noseMesh.rotation.x = Math.PI * 0.1;
+    noseMesh.position.set(0, 0.105, 0.125);
+    headPivot.add(noseMesh);
+
+    // Mouth / Lips
+    const mouthPivot = new THREE.Group();
+    mouthPivot.position.set(0, 0.048, 0.115);
+
+    const mouthMat = new THREE.MeshStandardMaterial({ color: 0x8b3a3a, roughness: 0.6 });
+    const mouthGeo = new THREE.BoxGeometry(0.048, 0.014, 0.015);
+    const mouthMesh = new THREE.Mesh(mouthGeo, mouthMat);
+    mouthPivot.add(mouthMesh);
+    headPivot.add(mouthPivot);
+
+    neckPivot.add(headPivot);
+    root.add(torsoPivot);
+    this.scene.add(root);
+
+    this.proceduralAvatar = {
+      root,
+      torsoPivot,
+      neckPivot,
+      headPivot,
+      leftEye,
+      rightEye,
+      mouthPivot,
+      mouthMesh
+    };
+  }
+
+  async loadMotionProfile() {
+    try {
+      const res = await fetch('/api/avatar/motion-profile');
+      if (res.ok) {
+        const data = await res.json();
+        if (data && data.physics_and_procedural) {
+          const p = data.physics_and_procedural;
+          if (p.breathing) Object.assign(this.motionProfile.breathing, p.breathing);
+          if (p.blinking) Object.assign(this.motionProfile.blinking, p.blinking);
+          if (p.gaze) Object.assign(this.motionProfile.gaze, p.gaze);
+          if (p.speech_gestures) Object.assign(this.motionProfile.speech_gestures, p.speech_gestures);
+          if (p.thinking_pose) Object.assign(this.motionProfile.thinking_pose, p.thinking_pose);
+        }
+      }
+    } catch (e) {}
+  }
+
+  async initMode() {
+    try {
+      const res = await fetch('/api/avatar/mode');
+      if (res.ok) {
+        const data = await res.json();
+        if (data && data.mode) {
+          this.setMode(data.mode, false);
+          return;
+        }
+      }
+    } catch (e) {}
+    this.setMode('3d_vrm', false);
+  }
+
+  async setMode(mode, persist = true) {
+    this.mode = mode;
+
+    if (mode === '3d_vrm') {
+      if (this.canvas) this.canvas.classList.add('active');
+      if (this.badge) this.badge.style.display = 'flex';
+      if (this.videoIdle) this.videoIdle.classList.add('video-disabled');
+      if (this.videoAction) this.videoAction.classList.add('video-disabled');
+
+      if (this.modeBtn) {
+        this.modeBtn.textContent = '3D Avatar';
+        this.modeBtn.classList.remove('video-mode');
+        this.modeBtn.title = 'Active: 3D Digital Human (Click to switch to Studio Video)';
+      }
+      if (this.btnMode3D) this.btnMode3D.classList.add('active');
+      if (this.btnModeVideo) this.btnModeVideo.classList.remove('active');
+      if (this.activeBadge) this.activeBadge.textContent = '3D Digital Human';
+    } else {
+      if (this.canvas) this.canvas.classList.remove('active');
+      if (this.badge) this.badge.style.display = 'none';
+      if (this.videoIdle) this.videoIdle.classList.remove('video-disabled');
+      if (this.videoAction) this.videoAction.classList.remove('video-disabled');
+
+      if (this.modeBtn) {
+        this.modeBtn.textContent = 'Studio Video';
+        this.modeBtn.classList.add('video-mode');
+        this.modeBtn.title = 'Active: Studio Video (Click to switch to 3D Digital Human)';
+      }
+      if (this.btnMode3D) this.btnMode3D.classList.remove('active');
+      if (this.btnModeVideo) this.btnModeVideo.classList.add('active');
+      if (this.activeBadge) this.activeBadge.textContent = 'Studio Video';
+    }
+
+    if (persist) {
+      try {
+        await fetch('/api/avatar/mode', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ mode })
+        });
+      } catch (e) {}
+    }
+  }
+
+  toggleMode() {
+    const next = this.mode === '3d_vrm' ? 'video' : '3d_vrm';
+    this.setMode(next, true);
+  }
+
+  async discoverAndLoadModel() {
+    try {
+      const res = await fetch('/api/avatar/models');
+      if (res.ok) {
+        const data = await res.json();
+        if (data && data.models && data.models.length > 0) {
+          const dhanushModel = data.models.find(m => m.name.toLowerCase().includes('dhanush')) || data.models[0];
+          await this.loadVRM(dhanushModel.url, dhanushModel.name);
+          return;
+        }
+      }
+    } catch (e) {}
+
+    // No VRM model uploaded yet: procedural fallback avatar is active
+    if (this.badgeText) this.badgeText.textContent = '3D Avatar (Drop VRM)';
+    if (this.modelNameLabel) this.modelNameLabel.textContent = 'Procedural Avatar (Drop VRM to load)';
+  }
+
+  loadVRM(url, name = 'dhanush.vrm') {
+    return new Promise((resolve, reject) => {
+      const loader = new GLTFLoader();
+      loader.register((parser) => new VRMLoaderPlugin(parser));
+
+      if (this.badgeText) this.badgeText.textContent = 'Loading 3D Model…';
+
+      loader.load(
+        url,
+        (gltf) => {
+          const vrm = gltf.userData.vrm;
+          if (!vrm) {
+            console.warn('[VRMAvatarEngine] Loaded file is not a valid VRM model.');
+            reject(new Error('Invalid VRM'));
+            return;
+          }
+
+          if (this.currentVrm) {
+            this.scene.remove(this.currentVrm.scene);
+            VRMUtils.deepDispose(this.currentVrm.scene);
+          }
+
+          VRMUtils.removeUnnecessaryVertices(gltf.scene);
+          VRMUtils.removeUnnecessaryJoints(gltf.scene);
+          VRMUtils.rotateVRM0(vrm);
+
+          // Position VRM so chest-up frames the viewport cleanly
+          vrm.scene.position.set(0, 0, 0);
+          this.scene.add(vrm.scene);
+          this.currentVrm = vrm;
+          this.loadedModelName = name;
+
+          // Hide procedural avatar now that canonical VRM is loaded
+          if (this.proceduralAvatar) {
+            this.proceduralAvatar.root.visible = false;
+          }
+
+          if (this.badgeText) this.badgeText.textContent = `3D Digital Human (${name})`;
+          if (this.modelNameLabel) this.modelNameLabel.textContent = name;
+
+          console.log(`[VRMAvatarEngine] Successfully loaded VRM model: ${name}`);
+          resolve(vrm);
+        },
+        (progress) => {
+          if (progress.total && this.badgeText) {
+            const pct = Math.round((progress.loaded / progress.total) * 100);
+            this.badgeText.textContent = `Loading 3D: ${pct}%`;
+          }
+        },
+        (err) => {
+          console.warn('[VRMAvatarEngine] VRM Load error, maintaining procedural avatar:', err);
+          if (this.badgeText) this.badgeText.textContent = '3D Avatar (Drop VRM)';
+          reject(err);
+        }
+      );
+    });
+  }
+
+  async uploadAndLoadVrm(file) {
+    if (!file || !file.name.toLowerCase().endsWith('.vrm')) return;
+
+    if (this.badgeText) this.badgeText.textContent = `Uploading ${file.name}…`;
+
+    const formData = new FormData();
+    formData.append('file', file);
+
+    try {
+      const res = await fetch('/api/avatar/upload-vrm', {
+        method: 'POST',
+        body: formData
+      });
+      const data = await res.json();
+      if (data && data.url) {
+        await this.loadVRM(data.url, file.name);
+        this.setMode('3d_vrm', true);
+      }
+    } catch (err) {
+      console.warn('Upload error, loading locally via blob:', err);
+      const blobUrl = URL.createObjectURL(file);
+      await this.loadVRM(blobUrl, file.name);
+      this.setMode('3d_vrm', true);
+    }
+  }
+
+  setupEventListeners() {
+    // Mode switcher button in bar
+    if (this.modeBtn) {
+      this.modeBtn.addEventListener('click', () => this.toggleMode());
+    }
+    // Settings modal mode buttons
+    if (this.btnMode3D) {
+      this.btnMode3D.addEventListener('click', () => this.setMode('3d_vrm', true));
+    }
+    if (this.btnModeVideo) {
+      this.btnModeVideo.addEventListener('click', () => this.setMode('video', true));
+    }
+    // Refresh model button
+    if (this.reloadVrmBtn) {
+      this.reloadVrmBtn.addEventListener('click', () => this.discoverAndLoadModel());
+    }
+    // File input upload
+    if (this.vrmFileInput) {
+      this.vrmFileInput.addEventListener('change', (e) => {
+        const file = e.target.files && e.target.files[0];
+        if (file) this.uploadAndLoadVrm(file);
+      });
+    }
+
+    // Drag-and-drop on model wrapper
+    if (this.wrapper && this.dropOverlay) {
+      ['dragenter', 'dragover'].forEach(evt => {
+        this.wrapper.addEventListener(evt, (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          this.dropOverlay.classList.add('drag-over');
+        });
+      });
+
+      ['dragleave', 'dragend'].forEach(evt => {
+        this.wrapper.addEventListener(evt, (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          if (!this.wrapper.contains(e.relatedTarget)) {
+            this.dropOverlay.classList.remove('drag-over');
+          }
+        });
+      });
+
+      this.wrapper.addEventListener('drop', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        this.dropOverlay.classList.remove('drag-over');
+        const file = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+        if (file) this.uploadAndLoadVrm(file);
+      });
+    }
+
+    // Mouse Gaze Tracking
+    window.addEventListener('mousemove', (e) => {
+      const nx = (e.clientX / window.innerWidth) * 2 - 1;
+      const ny = -(e.clientY / window.innerHeight) * 2 + 1;
+      this.mouseTarget.x = nx;
+      this.mouseTarget.y = ny;
+    }, { passive: true });
+  }
+
+  setAudioAnalyser(analyser, ctx) {
+    this.audioAnalyser = analyser;
+    this.audioCtx = ctx;
+    if (analyser) {
+      this.freqData = new Uint8Array(analyser.frequencyBinCount);
+      this.timeData = new Uint8Array(analyser.frequencyBinCount);
+    }
+  }
+
+  setState(state) {
+    this.state = state;
+    if (state !== 'speaking') {
+      this.isSpeaking = false;
+    }
+  }
+
+  onSpeechStart(text) {
+    this.isSpeaking = true;
+    this.speechText = text || '';
+    this.speechTime = 0;
+  }
+
+  onSpeechEnd() {
+    this.isSpeaking = false;
+    this.speechText = '';
+  }
+
+  updateVisemes() {
+    if (!this.audioAnalyser || !this.isSpeaking) {
+      for (const k of ['aa', 'ih', 'ou', 'ee', 'oh']) {
+        this.visemeWeights[k] = THREE.MathUtils.lerp(this.visemeWeights[k], 0, 0.22);
+      }
+      return;
+    }
+
+    this.audioAnalyser.getByteFrequencyData(this.freqData);
+    this.audioAnalyser.getByteTimeDomainData(this.timeData);
+
+    // RMS Volume calculation
+    let sum = 0;
+    const len = this.timeData.length;
+    for (let i = 0; i < len; i++) {
+      const v = (this.timeData[i] - 128) / 128;
+      sum += v * v;
+    }
+    const rms = Math.sqrt(sum / len);
+
+    if (rms < 0.012) {
+      for (const k of ['aa', 'ih', 'ou', 'ee', 'oh']) {
+        this.visemeWeights[k] = THREE.MathUtils.lerp(this.visemeWeights[k], 0, 0.28);
+      }
+      return;
+    }
+
+    const sampleRate = (this.audioCtx && this.audioCtx.sampleRate) || 48000;
+    const fftSize = this.audioAnalyser.fftSize || 1024;
+    const binStep = sampleRate / fftSize;
+
+    const getEnergy = (fMin, fMax) => {
+      const iStart = Math.max(0, Math.floor(fMin / binStep));
+      const iEnd = Math.min(this.freqData.length - 1, Math.ceil(fMax / binStep));
+      if (iEnd < iStart) return 0;
+      let total = 0;
+      for (let i = iStart; i <= iEnd; i++) total += this.freqData[i];
+      return total / (iEnd - iStart + 1);
+    };
+
+    const bands = this.motionProfile.viseme_bands;
+    const targets = {};
+    for (const [viseme, cfg] of Object.entries(bands)) {
+      const e1 = getEnergy(cfg.f1[0], cfg.f1[1]);
+      const e2 = getEnergy(cfg.f2[0], cfg.f2[1]);
+      const score = ((e1 * 0.65 + e2 * 0.35) / 175.0) * cfg.weight * Math.min(rms * 12.0, 1.25);
+      targets[viseme] = Math.min(Math.max(score, 0.0), 1.0);
+    }
+
+    let maxV = 'aa';
+    let maxScore = 0;
+    for (const [k, v] of Object.entries(targets)) {
+      if (v > maxScore) { maxScore = v; maxV = k; }
+    }
+
+    for (const k of ['aa', 'ih', 'ou', 'ee', 'oh']) {
+      const targetVal = (k === maxV) ? targets[k] : targets[k] * 0.3;
+      this.visemeWeights[k] = THREE.MathUtils.lerp(this.visemeWeights[k], targetVal, 0.35);
+    }
+  }
+
+  updateBlinking(dt) {
+    this.nextBlinkTime -= dt;
+    if (this.nextBlinkTime <= 0 && !this.isBlinking) {
+      this.isBlinking = true;
+      this.blinkTimer = 0;
+    }
+
+    if (this.isBlinking) {
+      this.blinkTimer += dt;
+      const b = this.motionProfile.blinking;
+      const tClose = b.close_duration_sec;
+      const tHold = tClose + b.hold_duration_sec;
+      const tTotal = tHold + b.open_duration_sec;
+
+      if (this.blinkTimer < tClose) {
+        this.blinkWeight = this.blinkTimer / tClose;
+      } else if (this.blinkTimer < tHold) {
+        this.blinkWeight = 1.0;
+      } else if (this.blinkTimer < tTotal) {
+        this.blinkWeight = 1.0 - ((this.blinkTimer - tHold) / b.open_duration_sec);
+      } else {
+        this.blinkWeight = 0;
+        this.isBlinking = false;
+        const isDouble = Math.random() < b.double_blink_probability;
+        this.nextBlinkTime = isDouble ? (0.12 + Math.random() * 0.08) : (b.mean_interval_sec + (Math.random() - 0.5) * b.interval_jitter_sec * 2);
+      }
+    } else {
+      this.blinkWeight = 0;
+    }
+  }
+
+  animate() {
+    requestAnimationFrame(() => this.animate());
+
+    const dt = Math.min(this.clock.getDelta(), 0.1);
+    this.breathTime += dt;
+    if (this.isSpeaking) this.speechTime += dt;
+
+    // Gaze interpolation
+    const gazeSpeed = dt * this.motionProfile.gaze.tracking_speed;
+    this.mouseCurrent.x = THREE.MathUtils.lerp(this.mouseCurrent.x, this.mouseTarget.x, gazeSpeed);
+    this.mouseCurrent.y = THREE.MathUtils.lerp(this.mouseCurrent.y, this.mouseTarget.y, gazeSpeed);
+
+    const gazeYaw = this.mouseCurrent.x * this.motionProfile.gaze.max_horizontal_rad;
+    const gazePitch = this.mouseCurrent.y * this.motionProfile.gaze.max_vertical_rad;
+
+    // Procedural Breathing
+    const breathRate = this.motionProfile.breathing.rate_hz;
+    const breathSin = Math.sin(this.breathTime * Math.PI * 2 * breathRate);
+    const chestRotX = breathSin * this.motionProfile.breathing.amplitude_chest;
+    const spineRotX = breathSin * this.motionProfile.breathing.amplitude_spine;
+    const headSwayZ = Math.sin(this.breathTime * Math.PI * 2 * (breathRate * 0.5)) * this.motionProfile.breathing.head_sway_rad;
+
+    // Speech nodding gestures
+    let speechNodX = 0;
+    let speechTiltZ = 0;
+    if (this.isSpeaking) {
+      speechNodX = Math.sin(this.speechTime * Math.PI * 2 * this.motionProfile.speech_gestures.head_nod_frequency_hz) * this.motionProfile.speech_gestures.head_nod_amplitude;
+      speechTiltZ = Math.sin(this.speechTime * Math.PI * 2 * (this.motionProfile.speech_gestures.head_nod_frequency_hz * 0.5)) * this.motionProfile.speech_gestures.lateral_emphasis_tilt;
+    }
+
+    // Thinking state posture
+    let thinkingRollZ = 0;
+    let thinkingPitchX = 0;
+    if (this.state === 'thinking') {
+      thinkingRollZ = this.motionProfile.thinking_pose.head_tilt_roll;
+      thinkingPitchX = this.motionProfile.thinking_pose.head_tilt_pitch;
+    }
+
+    this.updateBlinking(dt);
+    this.updateVisemes();
+
+    // 1. UPDATE CANONICAL VRM AVATAR
+    if (this.currentVrm) {
+      const humanoid = this.currentVrm.humanoid;
+      if (humanoid) {
+        const spine = humanoid.getNormalizedBoneNode('spine');
+        const chest = humanoid.getNormalizedBoneNode('chest');
+        const neck = humanoid.getNormalizedBoneNode('neck');
+        const head = humanoid.getNormalizedBoneNode('head');
+
+        if (spine) spine.rotation.x = spineRotX;
+        if (chest) chest.rotation.x = chestRotX;
+        if (neck) {
+          neck.rotation.y = gazeYaw * this.motionProfile.gaze.neck_follow_factor;
+          neck.rotation.x = gazePitch * this.motionProfile.gaze.neck_follow_factor;
+          neck.rotation.z = headSwayZ;
+        }
+        if (head) {
+          head.rotation.y = gazeYaw * (1.0 - this.motionProfile.gaze.neck_follow_factor);
+          head.rotation.x = gazePitch * (1.0 - this.motionProfile.gaze.neck_follow_factor) + speechNodX + thinkingPitchX;
+          head.rotation.z = speechTiltZ + thinkingRollZ;
+        }
+      }
+
+      const expressionManager = this.currentVrm.expressionManager;
+      if (expressionManager) {
+        for (const [v, w] of Object.entries(this.visemeWeights)) {
+          expressionManager.setValue(v, w);
+        }
+        expressionManager.setValue('blink', this.blinkWeight);
+        if (this.state === 'thinking') {
+          expressionManager.setValue('relaxed', 0.4);
+        } else {
+          expressionManager.setValue('relaxed', 0.0);
+        }
+        expressionManager.update();
+      }
+
+      this.currentVrm.update(dt);
+    }
+
+    // 2. UPDATE PROCEDURAL FALLBACK AVATAR
+    if (this.proceduralAvatar && (!this.currentVrm || !this.currentVrm.scene.visible)) {
+      const p = this.proceduralAvatar;
+      p.torsoPivot.rotation.x = chestRotX;
+      p.neckPivot.rotation.y = gazeYaw * this.motionProfile.gaze.neck_follow_factor;
+      p.neckPivot.rotation.z = headSwayZ;
+
+      p.headPivot.rotation.y = gazeYaw * (1.0 - this.motionProfile.gaze.neck_follow_factor);
+      p.headPivot.rotation.x = gazePitch + speechNodX + thinkingPitchX;
+      p.headPivot.rotation.z = speechTiltZ + thinkingRollZ;
+
+      // Blink eyelids
+      const eyelidScale = Math.max(0.1, 1.0 - this.blinkWeight * 0.9);
+      p.leftEye.eyelid.scale.y = eyelidScale;
+      p.rightEye.eyelid.scale.y = eyelidScale;
+
+      // Morph procedural mouth with formant visemes
+      const mouthOpen = this.visemeWeights.aa * 2.2 + this.visemeWeights.oh * 1.8 + (this.visemeWeights.ou + this.visemeWeights.ee) * 0.8;
+      const mouthSpread = this.visemeWeights.ee * 0.5 + this.visemeWeights.ih * 0.3 - this.visemeWeights.ou * 0.3;
+      p.mouthMesh.scale.y = Math.max(0.25, 0.25 + mouthOpen);
+      p.mouthMesh.scale.x = Math.max(0.7, 1.0 + mouthSpread);
+    }
+
+    if (this.renderer && this.scene && this.camera && this.mode === '3d_vrm') {
+      this.renderer.render(this.scene, this.camera);
+    }
+  }
+}
+
+// Instantiate and expose globally
+window.vrmAvatarEngine = new VRMAvatarEngine();
 </script>
 
 </body>

@@ -21,7 +21,7 @@ import concurrent.futures
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 
-from fastapi import FastAPI, BackgroundTasks, HTTPException, Request
+from fastapi import FastAPI, BackgroundTasks, HTTPException, Request, UploadFile, File
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -952,6 +952,87 @@ async def chat_endpoint(req: ChatRequest, background_tasks: BackgroundTasks):
         "audio_url": audio_url,
         "current_agent": CURRENT_AGENT,
         "action": triggered_action
+    }
+
+
+# =============================================================================
+# PERSISTENT 3D VRM DIGITAL HUMAN & MOTION APIS
+# =============================================================================
+class AvatarModeRequest(BaseModel):
+    mode: str  # "3d_vrm" or "video"
+
+
+@app.get("/api/avatar/mode")
+async def get_avatar_mode():
+    """Return the active avatar display mode ('3d_vrm' or 'video')."""
+    try:
+        from octopus_ai.memory.persistent_memory import persistent_memory_instance
+        mode = persistent_memory_instance.retrieve_variable("avatar_mode", "3d_vrm")
+    except Exception:
+        mode = "3d_vrm"
+    return {"mode": mode, "available_modes": ["3d_vrm", "video"]}
+
+
+@app.post("/api/avatar/mode")
+async def set_avatar_mode(req: AvatarModeRequest):
+    """Update preferred avatar mode ('3d_vrm' or 'video')."""
+    mode = req.mode.strip().lower()
+    if mode not in ["3d_vrm", "video"]:
+        raise HTTPException(status_code=400, detail="Mode must be '3d_vrm' or 'video'")
+    try:
+        from octopus_ai.memory.persistent_memory import persistent_memory_instance
+        persistent_memory_instance.store_variable("avatar_mode", mode)
+    except Exception:
+        pass
+    return {"success": True, "mode": mode}
+
+
+@app.get("/api/avatar/motion-profile")
+async def get_avatar_motion_profile():
+    """Return Dhanush's studio video-derived procedural motion profile."""
+    profile_path = repo_dir / "assets" / "avatars" / "dhanush_motion_profile.json"
+    if profile_path.exists():
+        with open(profile_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    # Generate default profile on the fly if missing
+    try:
+        from octopus_ai.tools.avatar_motion_extractor import generate_dhanush_motion_profile
+        return generate_dhanush_motion_profile()
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.get("/api/avatar/models")
+async def list_avatar_models():
+    """List available VRM models in the assets/avatars directory."""
+    avatars_dir = repo_dir / "assets" / "avatars"
+    models = []
+    if avatars_dir.exists():
+        for f in avatars_dir.glob("*.vrm"):
+            models.append({
+                "name": f.name,
+                "url": f"/assets/avatars/{f.name}",
+                "size_mb": round(f.stat().st_size / (1024 * 1024), 2)
+            })
+    return {"models": models, "has_models": len(models) > 0}
+
+
+@app.post("/api/avatar/upload-vrm")
+async def upload_vrm_avatar(file: UploadFile = File(...)):
+    """Upload and save a canonical Dhanush.vrm model into assets/avatars/."""
+    if not file.filename.lower().endswith(".vrm"):
+        raise HTTPException(status_code=400, detail="Only .vrm files are supported")
+    avatars_dir = repo_dir / "assets" / "avatars"
+    avatars_dir.mkdir(parents=True, exist_ok=True)
+    target_path = avatars_dir / file.filename
+    content = await file.read()
+    with open(target_path, "wb") as f:
+        f.write(content)
+    return {
+        "success": True,
+        "filename": file.filename,
+        "url": f"/assets/avatars/{file.filename}",
+        "message": f"Saved '{file.filename}' to assets/avatars/"
     }
 
 
