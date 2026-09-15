@@ -3,58 +3,58 @@
     {
       "id": "idle_1",
       "file": "/assets/videos/idle_1.mp4",
-      "duration": 5.0,
-      "style": "calm_attentive"
+      "duration": 10.0,
+      "style": "calm_natural_waiting"
     },
     {
       "id": "idle_2",
       "file": "/assets/videos/idle_2.mp4",
       "duration": 5.0,
-      "style": "natural_blink"
+      "style": "attentive_poise"
     },
     {
       "id": "idle_3",
       "file": "/assets/videos/idle_3.mp4",
-      "duration": 5.0,
-      "style": "subtle_tilt"
+      "duration": 5.5,
+      "style": "natural_blink_breathing"
     },
     {
       "id": "idle_4",
       "file": "/assets/videos/idle_4.mp4",
       "duration": 5.0,
-      "style": "gentle_smile"
+      "style": "gentle_awareness"
     },
     {
       "id": "idle_5",
       "file": "/assets/videos/idle_5.mp4",
       "duration": 5.0,
-      "style": "focused_listen"
+      "style": "focused_listening"
     },
     {
       "id": "idle_6",
       "file": "/assets/videos/idle_6.mp4",
-      "duration": 5.0,
-      "style": "relaxed_posture"
+      "duration": 5.5,
+      "style": "relaxed_presence"
     }
   ],
   "thinking": [
     {
       "id": "thinking_1",
       "file": "/assets/videos/thinking_1.mp4",
-      "duration": 5.0,
-      "style": "contemplative_upward"
+      "duration": 2.0,
+      "style": "attentive_listening_pause"
     },
     {
       "id": "thinking_2",
       "file": "/assets/videos/thinking_2.mp4",
-      "duration": 5.0,
-      "style": "calculating_deep"
+      "duration": 4.0,
+      "style": "calm_processing"
     },
     {
       "id": "thinking_3",
       "file": "/assets/videos/thinking_3.mp4",
-      "duration": 2.1,
-      "style": "attentive_pause"
+      "duration": 4.0,
+      "style": "contemplative_ponder"
     }
   ],
   "speaking": [
@@ -105,6 +105,20 @@
       "file": "/assets/videos/speaking_7.mp4",
       "duration": 5.0,
       "style": "animated_explanation",
+      "tempo": "expressive"
+    },
+    {
+      "id": "speaking_8",
+      "file": "/assets/videos/speaking_8.mp4",
+      "duration": 5.0,
+      "style": "smiling_dialogue",
+      "tempo": "medium"
+    },
+    {
+      "id": "speaking_9",
+      "file": "/assets/videos/speaking_9.mp4",
+      "duration": 5.0,
+      "style": "animated_response",
       "tempo": "expressive"
     }
   ]

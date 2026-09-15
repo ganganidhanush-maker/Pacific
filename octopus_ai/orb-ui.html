@@ -509,10 +509,12 @@
   <div class="stage">
     <!-- FRAMELESS FREE-STANDING VIDEO AVATAR (NO GHOSTING, PURE WHITE BLEND) -->
     <div class="model-wrapper" id="modelWrapper">
-      <!-- DUAL-BUFFER AVATAR PIPELINE (Continuous Seamless Crossfade, Zero Loop, Zero Blank Screen) -->
-      <video class="avatar-video" id="avatarVideoA" src="/assets/videos/idle_1.mp4" autoplay muted playsinline preload="auto"></video>
-      <video class="avatar-video video-hidden" id="avatarVideoB" src="/assets/videos/idle_2.mp4" muted playsinline preload="auto"></video>
+      <!-- BASE IDLE LAYER: 100% Closed Mouth Natural Presence from Normal_Waiting_DO____Keep_t -->
+      <video class="avatar-video" id="avatarVideoIdle" src="/assets/videos/idle.mp4" autoplay loop muted playsinline preload="auto"></video>
+      <!-- DYNAMIC ACTION LAYER: Real-time Audio-Reactive Lip Sync Overlay -->
+      <video class="avatar-video video-hidden" id="avatarVideoAction" src="/assets/videos/speaking_1.mp4" loop muted playsinline preload="auto"></video>
     </div>
+
 
     <!-- ELONGATED SEARCH BAR (DIRECTLY BELOW MODEL AS IN SKETCH) -->
     <div class="bar-container">
@@ -587,8 +589,8 @@
    - 9-Dots Multi-Agent Selection & Real Chrome Automations
 ========================================================================= */
 
-const avatarVideoA = document.getElementById('avatarVideoA');
-const avatarVideoB = document.getElementById('avatarVideoB');
+const avatarVideoIdle = document.getElementById('avatarVideoIdle');
+const avatarVideoAction = document.getElementById('avatarVideoAction');
 
 const appsBtn = document.getElementById('appsBtn');
 const agentsMenu = document.getElementById('agentsMenu');
@@ -606,20 +608,16 @@ let currentState = 'idle';
 let currentAudio = null;
 let isSubmitting = false;
 
-// Fallback clip library (enhanced dynamically via /api/avatar/manifest)
+// Dynamic clip library with 100% closed-mouth idle and non-repeating action pool
 const DEFAULT_AVATAR_MANIFEST = {
   idle: [
-    { id: 'idle_1', file: '/assets/videos/idle_1.mp4', duration: 5.0, style: 'calm_attentive' },
-    { id: 'idle_2', file: '/assets/videos/idle_2.mp4', duration: 5.0, style: 'natural_blink' },
-    { id: 'idle_3', file: '/assets/videos/idle_3.mp4', duration: 5.0, style: 'subtle_tilt' },
-    { id: 'idle_4', file: '/assets/videos/idle_4.mp4', duration: 5.0, style: 'gentle_smile' },
-    { id: 'idle_5', file: '/assets/videos/idle_5.mp4', duration: 5.0, style: 'focused_listen' },
-    { id: 'idle_6', file: '/assets/videos/idle_6.mp4', duration: 5.0, style: 'relaxed_posture' }
+    { id: 'idle_1', file: '/assets/videos/idle_1.mp4', duration: 10.0, style: 'calm_natural_waiting' },
+    { id: 'idle_2', file: '/assets/videos/idle_2.mp4', duration: 5.0, style: 'attentive_poise' },
+    { id: 'idle_3', file: '/assets/videos/idle_3.mp4', duration: 5.5, style: 'natural_blink_breathing' }
   ],
   thinking: [
-    { id: 'thinking_1', file: '/assets/videos/thinking_1.mp4', duration: 5.0, style: 'contemplative_upward' },
-    { id: 'thinking_2', file: '/assets/videos/thinking_2.mp4', duration: 5.0, style: 'calculating_deep' },
-    { id: 'thinking_3', file: '/assets/videos/thinking_3.mp4', duration: 2.1, style: 'attentive_pause' }
+    { id: 'thinking_1', file: '/assets/videos/thinking_1.mp4', duration: 2.0, style: 'attentive_listening_pause' },
+    { id: 'thinking_2', file: '/assets/videos/thinking_2.mp4', duration: 4.0, style: 'calm_processing' }
   ],
   speaking: [
     { id: 'speaking_1', file: '/assets/videos/speaking_1.mp4', duration: 3.4, tempo: 'fast', style: 'energetic_affirmation' },
@@ -628,25 +626,24 @@ const DEFAULT_AVATAR_MANIFEST = {
     { id: 'speaking_4', file: '/assets/videos/speaking_4.mp4', duration: 5.3, tempo: 'expressive', style: 'concluding_remark' },
     { id: 'speaking_5', file: '/assets/videos/speaking_5.mp4', duration: 4.15, tempo: 'fast', style: 'rapid_response' },
     { id: 'speaking_6', file: '/assets/videos/speaking_6.mp4', duration: 5.0, tempo: 'medium', style: 'conversational_flow' },
-    { id: 'speaking_7', file: '/assets/videos/speaking_7.mp4', duration: 5.0, tempo: 'expressive', style: 'animated_explanation' }
+    { id: 'speaking_7', file: '/assets/videos/speaking_7.mp4', duration: 5.0, tempo: 'expressive', style: 'animated_explanation' },
+    { id: 'speaking_8', file: '/assets/videos/speaking_8.mp4', duration: 5.0, tempo: 'medium', style: 'smiling_dialogue' },
+    { id: 'speaking_9', file: '/assets/videos/speaking_9.mp4', duration: 5.0, tempo: 'expressive', style: 'animated_response' }
   ]
 };
 
-class DynamicAvatarEngine {
-  constructor(elA, elB) {
-    this.videoA = elA;
-    this.videoB = elB;
-    this.activeVideo = elA;
-    this.standbyVideo = elB;
+class LayeredAvatarEngine {
+  constructor(idleEl, actionEl) {
+    this.idleVideo = idleEl;
+    this.actionVideo = actionEl;
     this.state = 'idle';
     this.manifest = DEFAULT_AVATAR_MANIFEST;
-    this.history = { idle: [], thinking: [], speaking: [] };
-    this.currentClip = null;
-    this.standbyClip = null;
-    this.isTransitioning = false;
+    this.history = { thinking: [], speaking: [] };
+    this.currentActionClip = null;
     this.playbackRate = 1.0;
+    this.isMouthActive = false;
 
-    // Load server manifest
+    // Load server manifest dynamically
     fetch('/api/avatar/manifest')
       .then(res => res.json())
       .then(data => {
@@ -656,23 +653,26 @@ class DynamicAvatarEngine {
       })
       .catch(() => {});
 
-    // Attach playback listeners
-    [this.videoA, this.videoB].forEach(v => {
-      v.addEventListener('timeupdate', () => this.onTimeUpdate(v));
-      v.addEventListener('ended', () => this.onEnded(v));
-    });
+    // Ensure idle video starts reliably
+    if (this.idleVideo) {
+      this.idleVideo.play().catch(() => {});
+    }
 
-    // Start with a randomized initial idle clip
-    const initial = this.pickNextClip('idle');
-    this.currentClip = initial;
-    this.activeVideo.src = initial.file;
-    this.activeVideo.play().catch(() => {});
-    this.preloadStandby('idle');
+    if (this.actionVideo) {
+      this.actionVideo.addEventListener('ended', () => {
+        if (this.state === 'speaking') {
+          // If speech is still ongoing, switch to another non-repeating clip seamlessly
+          this.playNextActionClip('speaking');
+        } else if (this.state === 'thinking') {
+          this.playNextActionClip('thinking');
+        }
+      });
+    }
   }
 
   pickNextClip(targetState, criteria = {}) {
-    const list = this.manifest[targetState] || this.manifest.idle;
-    const historyList = this.history[targetState] || [];
+    const list = this.manifest[targetState] || [];
+    if (list.length === 0) return null;
 
     let candidates = list;
     if (criteria.tempo) {
@@ -680,8 +680,9 @@ class DynamicAvatarEngine {
       if (tempoMatches.length > 0) candidates = tempoMatches;
     }
 
-    // Never repeat the last 2 played clips in this state
-    let pool = candidates.filter(c => !historyList.slice(-2).includes(c.id));
+    const historyList = this.history[targetState] || [];
+    // Filter out the last 3 played clips to prevent repetitive loops
+    let pool = candidates.filter(c => !historyList.slice(-3).includes(c.id));
     if (pool.length === 0) pool = candidates;
 
     const chosen = pool[Math.floor(Math.random() * pool.length)];
@@ -691,73 +692,53 @@ class DynamicAvatarEngine {
     return chosen;
   }
 
-  preloadStandby(targetState, criteria = {}) {
+  playNextActionClip(targetState, criteria = {}) {
     const clip = this.pickNextClip(targetState, criteria);
-    this.standbyClip = clip;
-    if (this.standbyVideo.src !== clip.file) {
-      this.standbyVideo.src = clip.file;
-      this.standbyVideo.playbackRate = this.playbackRate;
-      this.standbyVideo.load();
-    }
+    if (!clip || !this.actionVideo) return;
+    this.currentActionClip = clip;
+    this.actionVideo.src = clip.file;
+    this.actionVideo.playbackRate = this.playbackRate;
+    this.actionVideo.currentTime = 0;
+    this.actionVideo.play().catch(() => {});
   }
 
-  transitionToStandby(forceImmediate = false) {
-    if (this.isTransitioning && !forceImmediate) return;
-    this.isTransitioning = true;
-
-    const currentActive = this.activeVideo;
-    const nextActive = this.standbyVideo;
-
-    nextActive.currentTime = 0;
-    nextActive.playbackRate = this.playbackRate;
-    nextActive.play().catch(() => {});
-
-    nextActive.classList.remove('video-hidden');
-    currentActive.classList.add('video-hidden');
-
-    setTimeout(() => {
-      currentActive.pause();
-      this.activeVideo = nextActive;
-      this.standbyVideo = currentActive;
-      this.currentClip = this.standbyClip;
-      this.isTransitioning = false;
-
-      // Preload the next shuffled clip in standby
-      this.preloadStandby(this.state);
-    }, 240);
-  }
-
-  onTimeUpdate(video) {
-    if (video !== this.activeVideo) return;
-    // Crossfade 0.35s before end so transitions are butter-smooth without freezing
-    if (video.duration && video.currentTime >= (video.duration - 0.35)) {
-      if (!this.isTransitioning) {
-        this.transitionToStandby();
+  setState(newState, criteria = {}) {
+    this.state = newState;
+    if (newState === 'idle') {
+      this.setMouthVisible(false);
+      if (this.actionVideo) {
+        this.actionVideo.pause();
+      }
+    } else if (newState === 'thinking') {
+      this.playNextActionClip('thinking', criteria);
+      this.setMouthVisible(true);
+    } else if (newState === 'speaking') {
+      this.playNextActionClip('speaking', criteria);
+      if (criteria.immediate) {
+        this.setMouthVisible(true);
       }
     }
   }
 
-  onEnded(video) {
-    if (video === this.activeVideo && !this.isTransitioning) {
-      this.transitionToStandby();
+  setMouthVisible(visible) {
+    if (!this.actionVideo) return;
+    this.isMouthActive = visible;
+    if (visible) {
+      this.actionVideo.classList.remove('video-hidden');
+    } else {
+      this.actionVideo.classList.add('video-hidden');
     }
-  }
-
-  setState(newState, criteria = {}) {
-    if (this.state === newState && !criteria.force) return;
-    this.state = newState;
-    this.preloadStandby(newState, criteria);
-    this.transitionToStandby(true);
   }
 
   setPlaybackRate(rate) {
     this.playbackRate = Math.min(Math.max(rate, 0.75), 1.35);
-    if (this.activeVideo) this.activeVideo.playbackRate = this.playbackRate;
-    if (this.standbyVideo) this.standbyVideo.playbackRate = this.playbackRate;
+    if (this.actionVideo) {
+      this.actionVideo.playbackRate = this.playbackRate;
+    }
   }
 }
 
-const avatarEngine = new DynamicAvatarEngine(avatarVideoA, avatarVideoB);
+const avatarEngine = new LayeredAvatarEngine(avatarVideoIdle, avatarVideoAction);
 
 const agentConfigs = {
   'main': {
@@ -846,11 +827,12 @@ function setupAudioLipSync(audioElement, spokenText) {
 
   const bufferLength = audioAnalyser ? audioAnalyser.frequencyBinCount : 0;
   const dataArray = bufferLength ? new Uint8Array(bufferLength) : null;
-  let quietCount = 0;
+  let quietFrames = 0;
 
   function monitorLipSync() {
     if (!currentAudio || currentAudio.paused || currentAudio.ended) {
       if (lipSyncAnimFrame) cancelAnimationFrame(lipSyncAnimFrame);
+      avatarEngine.setMouthVisible(false);
       return;
     }
 
@@ -863,16 +845,19 @@ function setupAudioLipSync(audioElement, spokenText) {
       }
       const rms = Math.sqrt(sum / bufferLength);
 
-      // Acoustic pause detection (inter-phrase or punctuation silence)
-      if (rms < 0.018) {
-        quietCount++;
-        if (quietCount > 5) {
-          // Pause mouth movement naturally during quiet gaps
-          avatarEngine.activeVideo.playbackRate = 0.12;
+      // Acoustic energy threshold:
+      // When audio is audible (rms >= 0.016):
+      // reveal action video layer (open mouth speaking articulating words)
+      // When audio is quiet/paused (rms < 0.016):
+      // hide action layer, revealing the 100% closed mouth idle base layer underneath!
+      if (rms < 0.016) {
+        quietFrames++;
+        if (quietFrames >= 4) { // ~60-80ms of silence
+          avatarEngine.setMouthVisible(false);
         }
       } else {
-        quietCount = 0;
-        avatarEngine.activeVideo.playbackRate = avatarEngine.playbackRate;
+        quietFrames = 0;
+        avatarEngine.setMouthVisible(true);
       }
     }
     lipSyncAnimFrame = requestAnimationFrame(monitorLipSync);
@@ -880,6 +865,9 @@ function setupAudioLipSync(audioElement, spokenText) {
 
   if (audioAnalyser) {
     monitorLipSync();
+  } else {
+    // Fallback if Web Audio Analyser is blocked or unsupported
+    avatarEngine.setMouthVisible(true);
   }
 }
 
@@ -900,7 +888,7 @@ function playAgentSpeech(audioUrl, text) {
   if (!audioUrl) {
     const words = text.trim().split(/\s+/).filter(w => w.length > 0);
     const criteria = words.length <= 5 ? { tempo: 'fast' } : {};
-    avatarEngine.setState('speaking', criteria);
+    avatarEngine.setState('speaking', { ...criteria, immediate: true });
     statusDot.className = 'status-dot speaking';
     setTimeout(() => switchVideoState('idle'), Math.min(Math.max(text.length * 60, 2000), 5000));
     return;
@@ -918,6 +906,7 @@ function playAgentSpeech(audioUrl, text) {
 
   currentAudio.onended = () => {
     if (lipSyncAnimFrame) cancelAnimationFrame(lipSyncAnimFrame);
+    avatarEngine.setMouthVisible(false);
     avatarEngine.setPlaybackRate(1.0);
     switchVideoState('idle');
   };
@@ -925,6 +914,7 @@ function playAgentSpeech(audioUrl, text) {
   currentAudio.onerror = (e) => {
     console.warn('Audio playback note:', e);
     if (lipSyncAnimFrame) cancelAnimationFrame(lipSyncAnimFrame);
+    avatarEngine.setMouthVisible(false);
     avatarEngine.setPlaybackRate(1.0);
     switchVideoState('idle');
   };
@@ -932,6 +922,7 @@ function playAgentSpeech(audioUrl, text) {
   currentAudio.play().catch(err => {
     console.warn('Audio playback notice:', err);
     if (lipSyncAnimFrame) cancelAnimationFrame(lipSyncAnimFrame);
+    avatarEngine.setMouthVisible(false);
     avatarEngine.setPlaybackRate(1.0);
     switchVideoState('idle');
   });
