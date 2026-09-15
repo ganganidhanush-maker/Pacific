@@ -21,7 +21,7 @@ import concurrent.futures
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 
-from fastapi import FastAPI, BackgroundTasks, HTTPException
+from fastapi import FastAPI, BackgroundTasks, HTTPException, Request
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -38,9 +38,7 @@ for p in [str(parent_dir), str(repo_dir)]:
 from octopus_ai.automations import create_default_registry, PreviewManager
 from octopus_ai.agent.agent import OctopusAgent
 from octopus_ai.engine.selenium_engine import BrowserEngine
-from octopus_ai.main import prepare_main_profile
 from server.local_llm_service import local_llm_instance, sanitize_speech_response
-from octopus_ai.agent.orchestrator import master_orchestrator_instance
 from octopus_ai.agent.subagents.desktop_agent import desktop_agent_instance
 from octopus_ai.agent.subagents.research_agent import research_agent_instance
 from octopus_ai.agent.subagents.chatbot_agent import chatbot_agent_instance
@@ -55,6 +53,30 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def add_cors_and_cache_headers(request: Request, call_next):
+    """
+    Ensure robust CORS and cache headers across all responses including 304 and 206,
+    preventing Web Audio API media muting and browser caching issues.
+    """
+    response = await call_next(request)
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS, PUT, DELETE"
+    response.headers["Access-Control-Allow-Headers"] = "*"
+    response.headers["Access-Control-Expose-Headers"] = "*"
+
+    path = request.url.path
+    if path.startswith("/assets/audio_cache/"):
+        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        response.headers["Accept-Ranges"] = "bytes"
+    elif path.startswith("/api/"):
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+
+    return response
 
 # Assets and audio cache directory
 assets_dir = repo_dir / "assets"
@@ -281,38 +303,110 @@ def parse_whatsapp_request(user_msg: str) -> tuple:
     return contact.strip(), message.strip()
 
 
-async def generate_speech_file(text: str, voice: str = DEFAULT_VOICE) -> Optional[str]:
+def detect_language_and_voice(text: str) -> str:
     """
-    Generate speech matching Dhanush's voice using Chatterbox neural voice cloning.
-    Falls back cleanly to edge-tts if neural engine is loading or busy.
-    Cached by md5 hash to guarantee zero latency on repeated or common phrases.
+    Intelligently detect language and script from text to select the best neural voice.
+    Supports Telugu (te-IN-MohanNeural), Hindi (hi-IN-MadhurNeural), Tamil, Kannada,
+    Malayalam, Bengali, Gujarati, Asian, and European languages, defaulting to en-IN-PrabhatNeural.
+    """
+    if not text:
+        return DEFAULT_VOICE
+
+    cleaned = text.strip()
+    cleaned_lower = cleaned.lower()
+
+    # 1. Unicode Script Range Detection
+    # Telugu: U+0C00 - U+0C7F
+    if any('\u0c00' <= ch <= '\u0c7f' for ch in cleaned):
+        return "te-IN-MohanNeural"
+
+    # Devanagari / Hindi: U+0900 - U+097F
+    if any('\u0900' <= ch <= '\u097f' for ch in cleaned):
+        return "hi-IN-MadhurNeural"
+
+    # Tamil: U+0B80 - U+0BFF
+    if any('\u0b80' <= ch <= '\u0bff' for ch in cleaned):
+        return "ta-IN-ValluvarNeural"
+
+    # Kannada: U+0C80 - U+0CFF
+    if any('\u0c80' <= ch <= '\u0cff' for ch in cleaned):
+        return "kn-IN-GaganNeural"
+
+    # Malayalam: U+0D00 - U+0D7F
+    if any('\u0d00' <= ch <= '\u0d7f' for ch in cleaned):
+        return "ml-IN-MidhunNeural"
+
+    # Bengali: U+0980 - U+09FF
+    if any('\u0980' <= ch <= '\u09ff' for ch in cleaned):
+        return "bn-IN-BashkarNeural"
+
+    # Gujarati: U+0A80 - U+0AFF
+    if any('\u0a80' <= ch <= '\u0aff' for ch in cleaned):
+        return "gu-IN-NiranjanNeural"
+
+    # Japanese: Hiragana/Katakana U+3040 - U+30FF
+    if any('\u3040' <= ch <= '\u30ff' for ch in cleaned):
+        return "ja-JP-KeitaNeural"
+
+    # Chinese: U+4E00 - U+9FFF
+    if any('\u4e00' <= ch <= '\u9fff' for ch in cleaned):
+        return "zh-CN-YunxiNeural"
+
+    # Arabic / Urdu: U+0600 - U+06FF
+    if any('\u0600' <= ch <= '\u06ff' for ch in cleaned):
+        return "ur-IN-SalmanNeural"
+
+    # Russian / Cyrillic: U+0400 - U+04FF
+    if any('\u0400' <= ch <= '\u04ff' for ch in cleaned):
+        return "ru-RU-DmitryNeural"
+
+    # 2. Romanized Telugu / Tanglish Keyword Detection
+    tanglish_patterns = [
+        r'\b(namaskaram|namaste|bagunara|bagunnara|bagunnam|ela unnav|ela unnaru)\b',
+        r'\b(enti bro|emiti|cheppandi|cheppu|pampandi|pampinchu|chudandi|chudu)\b',
+        r'\b(telugulo|telugu lo|matladu|matladandi|avunu|ledu|kadhu|kadu|babu|anna)\b',
+        r'\b(em chestunnav|eppudu|ekkada|enduku|nenu|meeru|manaki)\b'
+    ]
+    if any(re.search(pat, cleaned_lower) for pat in tanglish_patterns):
+        return "te-IN-MohanNeural"
+
+    return DEFAULT_VOICE
+
+
+async def generate_speech_file(text: str, voice: Optional[str] = None) -> Optional[str]:
+    """
+    Generate speech matching Dhanush's voice or target language voice.
+    Supports native Telugu (te-IN-MohanNeural), Hindi, English, and all world languages.
+    Automatically detects language when voice is omitted.
     Returns relative URL path: /assets/audio_cache/<hash>.[wav|mp3]
     """
     cleaned_text = text.strip()
     if not cleaned_text:
         return None
 
+    target_voice = voice or detect_language_and_voice(cleaned_text)
+
     try:
         from server.voice_service import synthesize_dhanush_voice
-        cloned_audio_url = await synthesize_dhanush_voice(cleaned_text)
+        cloned_audio_url = await synthesize_dhanush_voice(cleaned_text, voice=target_voice)
         if cloned_audio_url:
             return cloned_audio_url
     except Exception as voice_err:
         print(f"⚠️ Neural voice clone fallback: {voice_err}")
 
-    # Fallback to Edge-TTS if neural model is warming up
+    # Fallback to Edge-TTS with target voice
     try:
-        text_hash = hashlib.md5(f"{voice}:{cleaned_text}".encode("utf-8")).hexdigest()
+        text_hash = hashlib.md5(f"{target_voice}:{cleaned_text}".encode("utf-8")).hexdigest()
         filename = f"{text_hash}.mp3"
         filepath = AUDIO_CACHE_DIR / filename
 
         if not filepath.exists() or filepath.stat().st_size == 0:
-            communicate = edge_tts.Communicate(cleaned_text, voice=voice)
+            communicate = edge_tts.Communicate(cleaned_text, voice=target_voice)
             await communicate.save(str(filepath))
 
         return f"/assets/audio_cache/{filename}"
     except Exception as e:
-        print(f"⚠️ TTS generation warning: {e}")
+        print(f"⚠️ TTS generation warning ({target_voice}): {e}")
         return None
 
 
@@ -323,6 +417,7 @@ def get_or_create_visible_engine() -> BrowserEngine:
     """
     global engine_instance, registry_instance
     if engine_instance is None or not engine_instance.is_ready():
+        from octopus_ai.main import prepare_main_profile
         user_data_dir, profile_label = prepare_main_profile()
         print(f"🚀 Launching Real Visible Chrome (Profile: {profile_label})...")
         engine_instance = BrowserEngine(
@@ -693,6 +788,7 @@ async def chat_endpoint(req: ChatRequest, background_tasks: BackgroundTasks):
 
         if is_actionable:
             try:
+                from octopus_ai.agent.orchestrator import master_orchestrator_instance
                 plan = await master_orchestrator_instance.optimize_and_decompose(user_msg)
                 exec_res = await master_orchestrator_instance.execute_plan(plan, user_msg)
                 raw_spoken = exec_res.get("spoken_response") or "I've organized the task across your sub-agents."

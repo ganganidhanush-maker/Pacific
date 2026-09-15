@@ -23,10 +23,19 @@ DEFAULT_MODEL = "llama3.2:latest"
 FALLBACK_MODELS = ["llama3:8b", "llama3:latest", "llama3.2"]
 
 SYSTEM_PROMPT = (
-    "You are Octopus AI Main Agent, a knowledgeable, direct, and helpful desktop AI assistant "
-    "created for Dhanush. Answer naturally, clearly, and concisely in 1 to 3 sentences "
-    "unless detailed steps are explicitly requested. Keep the tone friendly and conversational, "
-    "formatted well for spoken audio (avoid markdown asterisks, emojis, or bullet points unless asked)."
+    "You are Octopus AI, an exceptionally intelligent, insightful, and adaptable desktop AI assistant "
+    "created for Dhanush. You possess deep expertise across computer science, automation, reasoning, "
+    "mathematics, science, literature, and general knowledge.\n\n"
+    "MULTILINGUAL & TELUGU FLUENCY:\n"
+    "- You are fully multilingual and can understand and converse fluently in ANY language.\n"
+    "- You have native, fluent mastery of TELUGU (తెలుగు) as well as Telugu-English blend (Tanglish) and English.\n"
+    "- If the user asks in Telugu (either Telugu script or Romanized like 'ela unnav', 'enti bro', 'cheppu', 'namaskaram') "
+    "or asks you to speak in Telugu, respond naturally, warmly, and with high intelligence in authentic Telugu (తెలుగు script).\n"
+    "- If the user speaks in English, Hindi, or any other language, respond fluently in that same language.\n\n"
+    "RESPONSE STYLE & INTELLIGENCE:\n"
+    "- Provide intelligent, thoughtful, and articulate explanations with genuine depth, avoiding shallow one-liners unless asked.\n"
+    "- Keep the tone confident, friendly, and natural.\n"
+    "- Format answers cleanly for spoken reading (avoid markdown asterisks, raw code blocks, or emojis unless asked)."
 )
 
 
@@ -136,89 +145,116 @@ class LocalLLMService:
         system_override: Optional[str] = None
     ) -> str:
         """
-        Generate chat response using local Ollama LLM.
-        Maintains conversational history for user chat, while isolating internal orchestration prompts.
+        Generate chat response using high-intelligence reasoning.
+        Prioritizes Groq Cloud LLM (e.g. Qwen/Llama 70B) for ultra-fast, multi-lingual,
+        and deep responses, falling back smoothly to local Ollama (GPU-accelerated) or rule-based.
         """
         cleaned_prompt = prompt.strip()
         if not cleaned_prompt:
             return "How can I help you today?"
 
-        # Ensure server is running
-        loop = asyncio.get_event_loop()
-        is_ready = await loop.run_in_executor(None, self.ensure_server_running)
-        if not is_ready:
-            return self._fallback_chat(cleaned_prompt)
-
-        # Build message history
         sys_msg = system_override or SYSTEM_PROMPT
-        messages = [{"role": "system", "content": sys_msg}]
+        loop = asyncio.get_event_loop()
 
-        if add_to_history:
-            for msg in self.conversation_history[-self.max_history:]:
-                messages.append(msg)
-
-        messages.append({"role": "user", "content": cleaned_prompt})
-
-        payload = {
-            "model": self.model,
-            "messages": messages,
-            "stream": False,
-            "options": {
-                "temperature": 0.7,
-                "top_p": 0.9,
-                "num_predict": 120
-            }
-        }
-
+        # 1. High-Intelligence Groq Cloud Inference (fastest, most intelligent, native multilingual/Telugu)
         try:
-            req_data = json.dumps(payload).encode("utf-8")
-            req = urllib.request.Request(
-                f"{self.base_url}/api/chat",
-                data=req_data,
-                headers={"Content-Type": "application/json", "User-Agent": "OctopusAI"}
-            )
-
-            def _call_ollama():
-                with urllib.request.urlopen(req, timeout=30) as resp:
-                    return json.loads(resp.read().decode("utf-8"))
-
-            res_json = await loop.run_in_executor(None, _call_ollama)
-            reply = (res_json.get("message") or {}).get("content", "").strip()
-
-            if reply:
-                clean_reply = reply.replace("*", "").replace("#", "").strip()
+            from octopus_ai.agent.groq_llm import GroqLLM
+            groq = GroqLLM()
+            if groq.is_available and groq.client:
+                messages = [{"role": "system", "content": sys_msg}]
                 if add_to_history:
-                    self.conversation_history.append({"role": "user", "content": cleaned_prompt})
-                    self.conversation_history.append({"role": "assistant", "content": clean_reply})
-                return clean_reply
-            else:
-                return self._fallback_chat(cleaned_prompt)
+                    for msg in self.conversation_history[-self.max_history:]:
+                        messages.append(msg)
+                messages.append({"role": "user", "content": cleaned_prompt})
 
-        except Exception as e:
-            logger.error(f"[LocalLLM] Error querying Ollama: {e}")
-            return self._fallback_chat(cleaned_prompt)
+                def _call_groq():
+                    resp = groq.client.chat.completions.create(
+                        model=groq.model,
+                        messages=messages,
+                        temperature=0.7,
+                        max_tokens=1024,
+                        top_p=0.95
+                    )
+                    return resp.choices[0].message.content
+
+                groq_reply = await loop.run_in_executor(None, _call_groq)
+                if groq_reply and groq_reply.strip():
+                    clean_reply = sanitize_speech_response(groq_reply.strip())
+                    if add_to_history:
+                        self.conversation_history.append({"role": "user", "content": cleaned_prompt})
+                        self.conversation_history.append({"role": "assistant", "content": clean_reply})
+                    return clean_reply
+        except Exception as groq_err:
+            logger.info(f"[LocalLLM] Groq inference notice ({groq_err}), trying local Ollama...")
+
+        # 2. Local Ollama LLM with GPU acceleration
+        try:
+            is_ready = await loop.run_in_executor(None, self.ensure_server_running)
+            if is_ready:
+                messages = [{"role": "system", "content": sys_msg}]
+                if add_to_history:
+                    for msg in self.conversation_history[-self.max_history:]:
+                        messages.append(msg)
+                messages.append({"role": "user", "content": cleaned_prompt})
+
+                payload = {
+                    "model": self.model,
+                    "messages": messages,
+                    "stream": False,
+                    "options": {
+                        "temperature": 0.7,
+                        "top_p": 0.9,
+                        "num_predict": 1024
+                    }
+                }
+
+                req_data = json.dumps(payload).encode("utf-8")
+                req = urllib.request.Request(
+                    f"{self.base_url}/api/chat",
+                    data=req_data,
+                    headers={"Content-Type": "application/json", "User-Agent": "OctopusAI"}
+                )
+
+                def _call_ollama():
+                    with urllib.request.urlopen(req, timeout=30) as resp:
+                        return json.loads(resp.read().decode("utf-8"))
+
+                res_json = await loop.run_in_executor(None, _call_ollama)
+                reply = (res_json.get("message") or {}).get("content", "").strip()
+
+                if reply:
+                    clean_reply = sanitize_speech_response(reply)
+                    if add_to_history:
+                        self.conversation_history.append({"role": "user", "content": cleaned_prompt})
+                        self.conversation_history.append({"role": "assistant", "content": clean_reply})
+                    return clean_reply
+        except Exception as ollama_err:
+            logger.error(f"[LocalLLM] Error querying Ollama: {ollama_err}")
+
+        # 3. Graceful fallback
+        return self._fallback_chat(cleaned_prompt)
 
     def _fallback_chat(self, prompt: str) -> str:
-        """Fallback to Groq Cloud LLM, or conversational response if unreachable."""
+        """Fallback to Groq chat helper, or conversational response if unreachable."""
         try:
             from octopus_ai.agent.groq_llm import GroqLLM
             groq = GroqLLM()
             if groq.is_available:
                 resp = groq.chat(prompt, system_prompt=SYSTEM_PROMPT)
-                content = resp.get("content") or resp.get("response", "")
+                content = resp.get("text") or resp.get("content") or resp.get("response", "")
                 if content:
-                    return content.strip()
+                    return sanitize_speech_response(content.strip())
         except Exception as e:
             logger.debug(f"[LocalLLM] Groq fallback notice: {e}")
 
         p_lower = prompt.lower()
-        if any(w in p_lower for w in ["who are you", "what are you"]):
-            return "I am Octopus AI, your personal desktop AI assistant running locally on your computer."
-        elif any(w in p_lower for w in ["hello", "hi", "hey"]):
-            return "Hello Dhanush! I am online and ready to assist you."
-        elif "how are you" in p_lower:
-            return "I'm running smoothly with full GPU acceleration, ready for any question or task."
-        return f"I understand your question about '{prompt}'. How can I help you further with that?"
+        if any(w in p_lower for w in ["who are you", "what are you", "nuvvu evaru"]):
+            return "I am Octopus AI, your personal desktop AI assistant running with full intelligence on your computer."
+        elif any(w in p_lower for w in ["hello", "hi", "hey", "namaskaram", "namaste"]):
+            return "Hello Dhanush! I am online and ready to assist you in English, Telugu, or any other language."
+        elif "how are you" in p_lower or "ela unnav" in p_lower:
+            return "I am running smoothly with full hardware acceleration, ready for any question or task."
+        return f"I understand your request regarding '{prompt}'. How would you like to proceed?"
 
     def clear_history(self):
         """Reset conversation memory."""
@@ -227,8 +263,9 @@ class LocalLLMService:
 
 def sanitize_speech_response(text: str) -> str:
     """
-    Ensure the avatar always speaks natural, clean conversational English.
+    Ensure the avatar always speaks natural, clean conversational language.
     Strips out raw JSON, python code, dictionary brackets, and internal prompt leaks.
+    Supports English, Telugu (తెలుగు), and all multilingual scripts.
     """
     import re
     if not text:
@@ -242,15 +279,15 @@ def sanitize_speech_response(text: str) -> str:
         try:
             parsed = json.loads(cleaned[start:end+1])
             if isinstance(parsed, dict):
-                for key in ["spoken_summary", "response", "message", "content", "summary", "answer"]:
+                for key in ["text", "spoken_summary", "response", "message", "content", "summary", "answer"]:
                     val = parsed.get(key)
                     if isinstance(val, str) and val.strip():
                         return sanitize_speech_response(val)
         except Exception:
             pass
 
-        # Regex fallback for JSON fields
-        m = re.search(r'"(?:spoken_summary|response|message|content|summary)"\s*:\s*"([^"]+)"', cleaned)
+        # Regex fallback for JSON fields (including 'text')
+        m = re.search(r'"(?:text|spoken_summary|response|message|content|summary|answer)"\s*:\s*"([^"]+)"', cleaned)
         if m:
             return sanitize_speech_response(m.group(1))
 
@@ -261,9 +298,9 @@ def sanitize_speech_response(text: str) -> str:
     cleaned = re.sub(r'```[\s\S]*?```', '', cleaned)
     cleaned = re.sub(r'`[^`]*`', '', cleaned)
 
-    # Clean markdown formatting characters
+    # Clean markdown formatting characters while preserving all Unicode language scripts (Telugu, Hindi, etc.)
     cleaned = cleaned.replace("*", "").replace("#", "").replace("_", " ").replace(">", "")
-    cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+    cleaned = re.sub(r'[ \t]+', ' ', cleaned).strip()
 
     if not cleaned or cleaned.startswith("{"):
         return "I am ready. How can I help you today?"

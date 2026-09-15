@@ -17,8 +17,13 @@ from server.app import (
     chat_endpoint,
     ChatRequest,
     get_live_status,
-    get_avatar_manifest
+    get_avatar_manifest,
+    detect_language_and_voice,
+    generate_speech_file,
+    app
 )
+from server.local_llm_service import sanitize_speech_response
+from fastapi.testclient import TestClient
 
 
 
@@ -121,7 +126,43 @@ class TestIntentAndDisambiguation(unittest.TestCase):
         self.assertEqual(classify_intent('mute master volume'), 'desktop')
         self.assertEqual(classify_intent('lock workstation'), 'desktop')
 
+    def test_detect_language_and_voice(self):
+        self.assertEqual(detect_language_and_voice('నమస్కారం ధనుష్!'), 'te-IN-MohanNeural')
+        self.assertEqual(detect_language_and_voice('namaskaram bro ela unnav?'), 'te-IN-MohanNeural')
+        self.assertEqual(detect_language_and_voice('enti bro em chestunnav'), 'te-IN-MohanNeural')
+        self.assertEqual(detect_language_and_voice('नमस्ते धनুষ, आप कैसे हैं?'), 'hi-IN-MadhurNeural')
+        self.assertEqual(detect_language_and_voice('வணக்கம் தனுஷ்'), 'ta-IN-ValluvarNeural')
+        self.assertEqual(detect_language_and_voice('Open Calculator and Notepad for me'), 'en-IN-PrabhatNeural')
+
+    def test_generate_speech_file_telugu(self):
+        url = asyncio.run(generate_speech_file('నమస్కారం! నేను ఆక్టోపస్ ఏఐ.'))
+        self.assertIsNotNone(url)
+        self.assertTrue(url.startswith('/assets/audio_cache/'))
+        self.assertTrue(url.endswith('.mp3') or url.endswith('.wav'))
+
+    def test_sanitize_speech_response_multilingual(self):
+        # JSON response with 'text' key
+        json_resp = '{"action": "response", "text": "నమస్కారం! నేను మీకు సహాయపడగలను."}'
+        clean = sanitize_speech_response(json_resp)
+        self.assertEqual(clean, "నమస్కారం! నేను మీకు సహాయపడగలను.")
+
+        # Markdown asterisks stripped while preserving Telugu script
+        md_resp = "**నమస్కారం!** నేను *ఆక్టోపస్ ఏఐ*."
+        clean_md = sanitize_speech_response(md_resp)
+        self.assertEqual(clean_md, "నమస్కారం! నేను ఆక్టోపస్ ఏఐ.")
+
+    def test_cors_and_cache_control_headers(self):
+        client = TestClient(app)
+        api_res = client.get('/api/live-status')
+        self.assertEqual(api_res.status_code, 200)
+        self.assertEqual(api_res.headers.get('access-control-allow-origin'), '*')
+        self.assertIn('no-cache', api_res.headers.get('cache-control', ''))
+
+        audio_res = client.get('/assets/videos/video_manifest.json')
+        self.assertEqual(audio_res.headers.get('access-control-allow-origin'), '*')
+
 
 if __name__ == '__main__':
     unittest.main()
+
 

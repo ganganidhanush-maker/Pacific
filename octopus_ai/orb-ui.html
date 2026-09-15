@@ -381,9 +381,43 @@
     border-radius:50%;
     background:var(--c4);
   }
-  .status-dot.thinking{ background:var(--c2); animation: pulse 0.8s infinite; }
-  .status-dot.speaking{ background:var(--c1); animation: pulse 0.6s infinite; }
+  .status-dot.thinking{
+    background:linear-gradient(135deg, var(--c1), var(--c2), var(--c3));
+    box-shadow: 0 0 10px rgba(66,133,244,0.7);
+    animation: pulse 0.7s infinite alternate;
+  }
+  .status-dot.speaking{
+    background:var(--c1);
+    box-shadow: 0 0 12px rgba(66,133,244,0.8);
+    animation: pulse 0.5s infinite alternate;
+  }
   @keyframes pulse{ 0%,100%{ opacity:1; } 50%{ opacity:0.3; } }
+
+  .lang-toggle-btn{
+    border:1px solid var(--line);
+    background:#f8f9fa;
+    color:var(--c1);
+    font-size:11px;
+    font-weight:700;
+    padding:5px 9px;
+    border-radius:14px;
+    cursor:pointer;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    transition:all .18s ease;
+    user-select:none;
+  }
+  .lang-toggle-btn:hover{
+    background:#e8f0fe;
+    border-color:var(--c1);
+    box-shadow:0 2px 8px rgba(66,133,244,0.2);
+  }
+  .lang-toggle-btn.telugu{
+    background:#e8f0fe;
+    color:#1a73e8;
+    border-color:#1a73e8;
+  }
 
   /* ---------- BOTTOM-LEFT SETTINGS ---------- */
   .bottom-left{
@@ -513,6 +547,8 @@
       <video class="avatar-video" id="avatarVideoIdle" src="/assets/videos/idle.mp4" autoplay loop muted playsinline preload="auto"></video>
       <!-- DYNAMIC ACTION LAYER: Real-time Audio-Reactive Lip Sync Overlay -->
       <video class="avatar-video video-hidden" id="avatarVideoAction" src="/assets/videos/speaking_1.mp4" loop muted playsinline preload="auto"></video>
+      <!-- PERSISTENT AUDIO ELEMENT: Rock-solid Web Audio graph connection without leaks -->
+      <audio id="avatarAudio" preload="auto" playsinline crossorigin="anonymous" style="display:none;"></audio>
     </div>
 
 
@@ -528,6 +564,7 @@
 
         <input type="text" id="taskInput" placeholder="Explain your goal (e.g. 'I am Saiteja, send PTM notice to groups') or /desktop, /web..." autocomplete="off" />
         <div class="bar-buttons">
+          <button class="lang-toggle-btn" id="langToggleBtn" title="Language: English (Click to toggle Telugu)">EN</button>
           <button class="mic-btn" id="micBtn" title="Speak to Dhanush">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
@@ -591,6 +628,7 @@
 
 const avatarVideoIdle = document.getElementById('avatarVideoIdle');
 const avatarVideoAction = document.getElementById('avatarVideoAction');
+const avatarAudio = document.getElementById('avatarAudio');
 
 const appsBtn = document.getElementById('appsBtn');
 const agentsMenu = document.getElementById('agentsMenu');
@@ -600,12 +638,13 @@ const agentTagName = document.getElementById('agentTagName');
 const taskInput = document.getElementById('taskInput');
 const sendBtn = document.getElementById('sendBtn');
 const micBtn = document.getElementById('micBtn');
+const langToggleBtn = document.getElementById('langToggleBtn');
 const statusDot = document.getElementById('statusDot');
 const statusText = document.getElementById('statusText');
 
 let currentAgent = 'main';
 let currentState = 'idle';
-let currentAudio = null;
+let currentLang = 'en-IN'; // Default speech recognition language; toggleable to 'te-IN'
 let isSubmitting = false;
 
 // Dynamic clip library with 100% closed-mouth idle and non-repeating action pool
@@ -793,44 +832,59 @@ let audioCtx = null;
 let audioAnalyser = null;
 let audioSourceNode = null;
 let lipSyncAnimFrame = null;
+let webAudioConnected = false;
 
-function setupAudioLipSync(audioElement, spokenText) {
-  const words = spokenText.trim().split(/\s+/).filter(w => w.length > 0);
-  const wordCount = words.length;
-
-  audioElement.onloadedmetadata = () => {
-    const duration = audioElement.duration || 3.0;
-    const wordsPerSec = wordCount / duration;
-    // Human conversational speech ~2.5 words/sec. Dynamically scale lip motion speed!
-    const cadenceMultiplier = Math.min(Math.max(wordsPerSec / 2.5, 0.85), 1.25);
-    avatarEngine.setPlaybackRate(cadenceMultiplier);
-  };
-
+function initWebAudioGraph() {
+  if (webAudioConnected || !avatarAudio) return;
   try {
-    if (!audioCtx) {
-      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-      if (AudioContextClass) audioCtx = new AudioContextClass();
-    }
-    if (audioCtx && audioCtx.state === 'suspended') {
-      audioCtx.resume();
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    if (!audioCtx && AudioContextClass) {
+      audioCtx = new AudioContextClass();
     }
     if (audioCtx && !audioSourceNode) {
-      audioSourceNode = audioCtx.createMediaElementSource(audioElement);
+      audioSourceNode = audioCtx.createMediaElementSource(avatarAudio);
       audioAnalyser = audioCtx.createAnalyser();
       audioAnalyser.fftSize = 256;
       audioSourceNode.connect(audioAnalyser);
       audioAnalyser.connect(audioCtx.destination);
+      webAudioConnected = true;
     }
   } catch (err) {
-    console.warn("Web Audio Lip Sync note:", err);
+    console.warn("Web Audio initialization notice:", err);
   }
+}
+
+function unlockAudioContext() {
+  if (!audioCtx) {
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    if (AudioContextClass) audioCtx = new AudioContextClass();
+  }
+  if (audioCtx && audioCtx.state === 'suspended') {
+    audioCtx.resume().catch(() => {});
+  }
+}
+
+// User interactions auto-unlock Web Audio
+document.addEventListener('click', unlockAudioContext, { passive: true });
+document.addEventListener('keydown', unlockAudioContext, { passive: true });
+
+function setupAudioLipSync(audioElement, spokenText) {
+  const words = (spokenText || '').trim().split(/\s+/).filter(w => w.length > 0);
+  const wordCount = words.length;
+
+  const duration = audioElement.duration || Math.max(wordCount / 2.5, 1.5);
+  const wordsPerSec = wordCount / Math.max(duration, 0.5);
+  // Human conversational speech ~2.5 words/sec. Dynamically scale lip motion speed!
+  const cadenceMultiplier = Math.min(Math.max(wordsPerSec / 2.5, 0.85), 1.25);
+  avatarEngine.setPlaybackRate(cadenceMultiplier);
 
   const bufferLength = audioAnalyser ? audioAnalyser.frequencyBinCount : 0;
   const dataArray = bufferLength ? new Uint8Array(bufferLength) : null;
   let quietFrames = 0;
+  let signalDetected = false;
 
   function monitorLipSync() {
-    if (!currentAudio || currentAudio.paused || currentAudio.ended) {
+    if (!avatarAudio || avatarAudio.paused || avatarAudio.ended) {
       if (lipSyncAnimFrame) cancelAnimationFrame(lipSyncAnimFrame);
       avatarEngine.setMouthVisible(false);
       return;
@@ -845,87 +899,99 @@ function setupAudioLipSync(audioElement, spokenText) {
       }
       const rms = Math.sqrt(sum / bufferLength);
 
-      // Acoustic energy threshold:
-      // When audio is audible (rms >= 0.016):
-      // reveal action video layer (open mouth speaking articulating words)
-      // When audio is quiet/paused (rms < 0.016):
-      // hide action layer, revealing the 100% closed mouth idle base layer underneath!
-      if (rms < 0.016) {
+      if (rms > 0.015) {
+        signalDetected = true;
+        quietFrames = 0;
+        avatarEngine.setMouthVisible(true);
+      } else if (signalDetected) {
+        // Natural inter-sentence pause: only hide if sound was previously active and now paused for >120ms
         quietFrames++;
-        if (quietFrames >= 4) { // ~60-80ms of silence
+        if (quietFrames >= 8) {
           avatarEngine.setMouthVisible(false);
         }
       } else {
-        quietFrames = 0;
+        // Audio is actively playing but analyser is buffering or unmetered:
+        // KEEP THE MOUTH VISIBLY TALKING!
         avatarEngine.setMouthVisible(true);
       }
+    } else {
+      // Fallback if no analyser: ALWAYS KEEP TALKING WHILE AUDIO PLAYS!
+      avatarEngine.setMouthVisible(true);
     }
+
     lipSyncAnimFrame = requestAnimationFrame(monitorLipSync);
   }
 
-  if (audioAnalyser) {
-    monitorLipSync();
-  } else {
-    // Fallback if Web Audio Analyser is blocked or unsupported
-    avatarEngine.setMouthVisible(true);
-  }
+  monitorLipSync();
 }
 
 // Natural Male Neural Voice Playback & Real-Time Lip Sync Alignment
 function playAgentSpeech(audioUrl, text) {
-  if (currentAudio) {
-    currentAudio.onended = null;
-    currentAudio.pause();
-    currentAudio.currentTime = 0;
-    currentAudio = null;
-  }
+  unlockAudioContext();
+  initWebAudioGraph();
+
   if (lipSyncAnimFrame) {
     cancelAnimationFrame(lipSyncAnimFrame);
   }
 
   statusText.textContent = text;
 
-  if (!audioUrl) {
-    const words = text.trim().split(/\s+/).filter(w => w.length > 0);
-    const criteria = words.length <= 5 ? { tempo: 'fast' } : {};
-    avatarEngine.setState('speaking', { ...criteria, immediate: true });
-    statusDot.className = 'status-dot speaking';
-    setTimeout(() => switchVideoState('idle'), Math.min(Math.max(text.length * 60, 2000), 5000));
+  const words = (text || '').trim().split(/\s+/).filter(w => w.length > 0);
+  const criteria = words.length <= 5 ? { tempo: 'fast' } : {};
+
+  // IMMEDIATELY activate the voice frame so he talks right away!
+  avatarEngine.setState('speaking', { ...criteria, immediate: true });
+  statusDot.className = 'status-dot speaking';
+  avatarEngine.setMouthVisible(true);
+
+  if (!audioUrl || !avatarAudio) {
+    const displayDuration = Math.min(Math.max(words.length * 400, 2500), 7000);
+    setTimeout(() => {
+      switchVideoState('idle');
+      statusText.textContent = 'Ready';
+    }, displayDuration);
     return;
   }
 
-  currentAudio = new Audio(audioUrl);
+  try {
+    avatarAudio.pause();
+    avatarAudio.currentTime = 0;
+    avatarAudio.src = audioUrl;
 
-  currentAudio.onplay = () => {
-    const words = text.trim().split(/\s+/).filter(w => w.length > 0);
-    const criteria = words.length <= 5 ? { tempo: 'fast' } : {};
-    avatarEngine.setState('speaking', criteria);
-    statusDot.className = 'status-dot speaking';
-    setupAudioLipSync(currentAudio, text);
-  };
+    avatarAudio.onplay = () => {
+      avatarEngine.setMouthVisible(true);
+      setupAudioLipSync(avatarAudio, text);
+    };
 
-  currentAudio.onended = () => {
-    if (lipSyncAnimFrame) cancelAnimationFrame(lipSyncAnimFrame);
-    avatarEngine.setMouthVisible(false);
-    avatarEngine.setPlaybackRate(1.0);
-    switchVideoState('idle');
-  };
+    avatarAudio.onended = () => {
+      if (lipSyncAnimFrame) cancelAnimationFrame(lipSyncAnimFrame);
+      avatarEngine.setMouthVisible(false);
+      avatarEngine.setPlaybackRate(1.0);
+      switchVideoState('idle');
+      statusText.textContent = 'Ready';
+    };
 
-  currentAudio.onerror = (e) => {
-    console.warn('Audio playback note:', e);
-    if (lipSyncAnimFrame) cancelAnimationFrame(lipSyncAnimFrame);
-    avatarEngine.setMouthVisible(false);
-    avatarEngine.setPlaybackRate(1.0);
-    switchVideoState('idle');
-  };
+    avatarAudio.onerror = (e) => {
+      console.warn('Audio playback note:', e);
+      if (lipSyncAnimFrame) cancelAnimationFrame(lipSyncAnimFrame);
+      setTimeout(() => {
+        switchVideoState('idle');
+        statusText.textContent = 'Ready';
+      }, Math.min(Math.max(words.length * 350, 2000), 5000));
+    };
 
-  currentAudio.play().catch(err => {
-    console.warn('Audio playback notice:', err);
-    if (lipSyncAnimFrame) cancelAnimationFrame(lipSyncAnimFrame);
-    avatarEngine.setMouthVisible(false);
-    avatarEngine.setPlaybackRate(1.0);
-    switchVideoState('idle');
-  });
+    avatarAudio.play().catch(err => {
+      console.warn('Direct audio play notice:', err);
+      // If browser blocked autoplay, keep talking for duration of message
+      setTimeout(() => {
+        switchVideoState('idle');
+        statusText.textContent = 'Ready';
+      }, Math.min(Math.max(words.length * 350, 2000), 5000));
+    });
+  } catch (playErr) {
+    console.warn('Audio play exception:', playErr);
+    setTimeout(() => switchVideoState('idle'), 3000);
+  }
 }
 
 // 9-Dots Menu Toggle
@@ -966,11 +1032,10 @@ async function selectAgent(agentId) {
     c.classList.toggle('active', c.getAttribute('data-agent') === agentId);
   });
 
-  if (currentAudio) {
-    currentAudio.onended = null;
-    currentAudio.pause();
-    currentAudio.currentTime = 0;
-    currentAudio = null;
+  if (avatarAudio) {
+    avatarAudio.onended = null;
+    avatarAudio.pause();
+    avatarAudio.currentTime = 0;
   }
 
   // Notify backend and play natural voice greeting
@@ -1008,16 +1073,31 @@ async function submitTask() {
   const text = taskInput.value.trim();
   if (!text) return;
 
-  if (currentAudio) {
-    currentAudio.onended = null;
-    currentAudio.pause();
-    currentAudio.currentTime = 0;
-    currentAudio = null;
+  unlockAudioContext();
+
+  if (avatarAudio) {
+    avatarAudio.onended = null;
+    avatarAudio.pause();
+    avatarAudio.currentTime = 0;
   }
 
   isSubmitting = true;
   taskInput.value = '';
   switchVideoState('thinking');
+
+  const thinkingStages = [
+    '🧠 Analyzing with high-intelligence reasoning…',
+    '⚡ Synthesizing multi-agent thoughts…',
+    '💡 Formulating intelligent response…'
+  ];
+  let stageIdx = 0;
+  statusText.textContent = thinkingStages[0];
+  const thinkingInterval = setInterval(() => {
+    if (isSubmitting) {
+      stageIdx = (stageIdx + 1) % thinkingStages.length;
+      statusText.textContent = thinkingStages[stageIdx];
+    }
+  }, 1200);
 
   try {
     const res = await fetch('/api/chat', {
@@ -1045,12 +1125,14 @@ async function submitTask() {
       switchVideoState('idle');
     } else {
       switchVideoState('idle');
+      statusText.textContent = 'Ready';
     }
   } catch (err) {
     console.error('Task error:', err);
     switchVideoState('idle');
     statusText.textContent = 'Ready';
   } finally {
+    clearInterval(thinkingInterval);
     isSubmitting = false;
   }
 }
@@ -1059,6 +1141,29 @@ sendBtn.addEventListener('click', submitTask);
 taskInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') submitTask();
 });
+
+// Language Switcher (English / Telugu)
+if (langToggleBtn) {
+  langToggleBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (currentLang === 'en-IN') {
+      currentLang = 'te-IN';
+      langToggleBtn.textContent = 'TE';
+      langToggleBtn.classList.add('telugu');
+      langToggleBtn.title = 'Language: Telugu (తెలుగు) — Click to switch to English';
+      statusText.textContent = 'Speech Language: Telugu (తెలుగు)';
+    } else {
+      currentLang = 'en-IN';
+      langToggleBtn.textContent = 'EN';
+      langToggleBtn.classList.remove('telugu');
+      langToggleBtn.title = 'Language: English (India) — Click to switch to Telugu';
+      statusText.textContent = 'Speech Language: English';
+    }
+    if (recognition) {
+      recognition.lang = currentLang;
+    }
+  });
+}
 
 // Speech Recognition (Mic button)
 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -1069,13 +1174,13 @@ if (SpeechRecognition) {
   recognition = new SpeechRecognition();
   recognition.continuous = false;
   recognition.interimResults = true;
-  recognition.lang = 'en-US';
+  recognition.lang = currentLang;
 
   recognition.onstart = () => {
     isListening = true;
     micBtn.classList.add('active');
     switchVideoState('idle');
-    statusText.textContent = 'Listening to you…';
+    statusText.textContent = currentLang === 'te-IN' ? 'Listening in Telugu (తెలుగు)…' : 'Listening to you…';
   };
 
   recognition.onresult = (e) => {

@@ -94,18 +94,40 @@ class VoiceService:
             print(f"[VoiceService] Initialization warning/fallback: {e}")
             return False
 
-    async def generate_speech_file(self, text: str) -> Optional[str]:
+    async def generate_speech_file(self, text: str, voice: Optional[str] = None) -> Optional[str]:
         """
-        Generates speech matching Dhanush's voice.
-        Caches synthesized audio by text hash for immediate 0ms response on repeated phrases.
-        Returns web-accessible relative URL: /assets/audio_cache/<hash>.wav
+        Generates speech matching Dhanush's voice or target language voice.
+        Supports native Telugu (te-IN-MohanNeural), Hindi, English, and all world languages.
+        Caches synthesized audio by text & voice hash for immediate 0ms response on repeated phrases.
+        Returns web-accessible relative URL: /assets/audio_cache/<hash>.[wav|mp3]
         """
         cleaned_text = text.strip()
         if not cleaned_text:
             return None
 
-        # Clean prompt and build unique cache key for Dhanush voice
-        cache_key = f"dhanush_voice_v1:{cleaned_text.lower()}"
+        # Determine target voice if not explicitly provided
+        target_voice = voice
+        if not target_voice:
+            # Check for Telugu script (\u0c00-\u0c7f)
+            if any('\u0c00' <= ch <= '\u0c7f' for ch in cleaned_text):
+                target_voice = "te-IN-MohanNeural"
+            # Check for Devanagari / Hindi script (\u0900-\u097f)
+            elif any('\u0900' <= ch <= '\u097f' for ch in cleaned_text):
+                target_voice = "hi-IN-MadhurNeural"
+            # Check for Tamil (\u0b80-\u0bff)
+            elif any('\u0b80' <= ch <= '\u0bff' for ch in cleaned_text):
+                target_voice = "ta-IN-ValluvarNeural"
+            # Check for Kannada (\u0c80-\u0cff)
+            elif any('\u0c80' <= ch <= '\u0cff' for ch in cleaned_text):
+                target_voice = "kn-IN-GaganNeural"
+            # Check for Malayalam (\u0d00-\u0d7f)
+            elif any('\u0d00' <= ch <= '\u0d7f' for ch in cleaned_text):
+                target_voice = "ml-IN-MidhunNeural"
+            else:
+                target_voice = "en-IN-PrabhatNeural"
+
+        # Build unique cache key including target voice
+        cache_key = f"dhanush_voice_{target_voice}:{cleaned_text.lower()}"
         text_hash = hashlib.md5(cache_key.encode("utf-8")).hexdigest()
         filename = f"{text_hash}.wav"
         filepath = AUDIO_CACHE_DIR / filename
@@ -114,11 +136,13 @@ class VoiceService:
         if filepath.exists() and filepath.stat().st_size > 1000:
             return f"/assets/audio_cache/{filename}"
 
-        # If Chatterbox model is not initialized, try initializing
-        if not self.initialized:
+        # If Chatterbox model is not initialized and English is targeted, try initializing
+        # Chatterbox is English-only; for Telugu and other languages, Edge-TTS provides native neural synthesis
+        is_english = target_voice.startswith("en-")
+        if is_english and not self.initialized:
             self.initialize()
 
-        if self.initialized and self.model is not None:
+        if is_english and self.initialized and self.model is not None:
             try:
                 import torch
                 import torchaudio as ta
@@ -140,22 +164,23 @@ class VoiceService:
             except Exception as gen_err:
                 print(f"[VoiceService] Synthesis error ({gen_err}), falling back to Edge TTS...")
 
-        # Fallback to high-quality Indian English voice if neural model unavailable
+        # Native Edge-TTS for Telugu, Hindi, Tamil, and high-quality voice synthesis
         try:
             import edge_tts
             fallback_filename = f"{text_hash}.mp3"
             fallback_path = AUDIO_CACHE_DIR / fallback_filename
             if not fallback_path.exists() or fallback_path.stat().st_size == 0:
-                communicate = edge_tts.Communicate(cleaned_text, voice="en-IN-PrabhatNeural")
+                communicate = edge_tts.Communicate(cleaned_text, voice=target_voice)
                 await communicate.save(str(fallback_path))
             return f"/assets/audio_cache/{fallback_filename}"
         except Exception as fb_err:
-            print(f"[VoiceService] Fallback TTS error: {fb_err}")
+            print(f"[VoiceService] Fallback TTS error with {target_voice}: {fb_err}")
             return None
 
 
 # Global singleton instance
 voice_service_instance = VoiceService.get_instance()
 
-async def synthesize_dhanush_voice(text: str) -> Optional[str]:
-    return await voice_service_instance.generate_speech_file(text)
+async def synthesize_dhanush_voice(text: str, voice: Optional[str] = None) -> Optional[str]:
+    return await voice_service_instance.generate_speech_file(text, voice=voice)
+
