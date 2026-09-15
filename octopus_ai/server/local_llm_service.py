@@ -48,8 +48,15 @@ class LocalLLMService:
         self.available_models: List[str] = []
         self.is_connected = False
         self.process: Optional[subprocess.Popen] = None
-        self.conversation_history: List[Dict[str, str]] = []
         self.max_history = 10
+        # Restore persistent conversation history from SQLite across restarts
+        try:
+            from octopus_ai.memory.persistent_memory import persistent_memory_instance
+            self.persistent_memory = persistent_memory_instance
+            self.conversation_history: List[Dict[str, str]] = self.persistent_memory.get_recent_history(limit=self.max_history)
+        except Exception:
+            self.persistent_memory = None
+            self.conversation_history: List[Dict[str, str]] = []
 
     @classmethod
     def get_instance(cls) -> "LocalLLMService":
@@ -159,6 +166,20 @@ class LocalLLMService:
         sys_msg = system_override or SYSTEM_PROMPT
         loop = asyncio.get_event_loop()
 
+        # Check NotebookLM persistent knowledge base for grounded source excerpts
+        try:
+            if self.persistent_memory:
+                grounded_chunks = self.persistent_memory.query_knowledge_base(cleaned_prompt, top_k=2)
+                if grounded_chunks:
+                    sources_text = "\n\n".join([f"[{c['title']} (chunk {c['chunk_index']})]: {c['excerpt']}" for c in grounded_chunks])
+                    sys_msg = (
+                        f"{sys_msg}\n\n"
+                        f"[NOTEBOOKLM GROUNDED KNOWLEDGE BASE SOURCES]:\n{sources_text}\n"
+                        f"Ground your answer directly in the above notes/sources when relevant, mentioning the source title."
+                    )
+        except Exception as kb_err:
+            logger.debug(f"[LocalLLM] Knowledge base grounding notice: {kb_err}")
+
         # 1. Kimi K3 ("Kiwi") Moonshot Engine Integration (From Open Interpreter Blueprint)
         try:
             from octopus_ai.agent.kimi_llm import KimiLLM
@@ -182,9 +203,7 @@ class LocalLLMService:
                 kimi_reply = await loop.run_in_executor(None, _call_kimi)
                 if kimi_reply and kimi_reply.strip():
                     clean_reply = sanitize_speech_response(kimi_reply.strip())
-                    if add_to_history:
-                        self.conversation_history.append({"role": "user", "content": cleaned_prompt})
-                        self.conversation_history.append({"role": "assistant", "content": clean_reply})
+                    self._record_turn(cleaned_prompt, clean_reply, add_to_history)
                     return clean_reply
         except Exception as kimi_err:
             logger.info(f"[LocalLLM] Kimi K3 engine notice ({kimi_err}), checking Groq Cloud...")
@@ -213,14 +232,12 @@ class LocalLLMService:
                 groq_reply = await loop.run_in_executor(None, _call_groq)
                 if groq_reply and groq_reply.strip():
                     clean_reply = sanitize_speech_response(groq_reply.strip())
-                    if add_to_history:
-                        self.conversation_history.append({"role": "user", "content": cleaned_prompt})
-                        self.conversation_history.append({"role": "assistant", "content": clean_reply})
+                    self._record_turn(cleaned_prompt, clean_reply, add_to_history)
                     return clean_reply
         except Exception as groq_err:
             logger.info(f"[LocalLLM] Groq inference notice ({groq_err}), trying local Ollama...")
 
-        # 2. Local Ollama LLM with GPU acceleration
+        # 3. Local Ollama LLM with GPU acceleration
         try:
             is_ready = await loop.run_in_executor(None, self.ensure_server_running)
             if is_ready:
@@ -257,15 +274,30 @@ class LocalLLMService:
 
                 if reply:
                     clean_reply = sanitize_speech_response(reply)
-                    if add_to_history:
-                        self.conversation_history.append({"role": "user", "content": cleaned_prompt})
-                        self.conversation_history.append({"role": "assistant", "content": clean_reply})
+                    self._record_turn(cleaned_prompt, clean_reply, add_to_history)
                     return clean_reply
         except Exception as ollama_err:
             logger.error(f"[LocalLLM] Error querying Ollama: {ollama_err}")
 
-        # 3. Graceful fallback
-        return self._fallback_chat(cleaned_prompt)
+        # 4. Graceful fallback
+        fallback_reply = self._fallback_chat(cleaned_prompt)
+        self._record_turn(cleaned_prompt, fallback_reply, add_to_history)
+        return fallback_reply
+
+    def _record_turn(self, user_text: str, assistant_text: str, add_to_history: bool = True):
+        """Record user and assistant turns to RAM history and persistent SQLite store."""
+        if not add_to_history:
+            return
+        self.conversation_history.append({"role": "user", "content": user_text})
+        self.conversation_history.append({"role": "assistant", "content": assistant_text})
+        if len(self.conversation_history) > self.max_history * 2:
+            self.conversation_history = self.conversation_history[-self.max_history * 2:]
+        if self.persistent_memory:
+            try:
+                self.persistent_memory.add_message("user", user_text)
+                self.persistent_memory.add_message("assistant", assistant_text)
+            except Exception as e:
+                logger.debug(f"[LocalLLM] Save persistent turn notice: {e}")
 
     def _fallback_chat(self, prompt: str) -> str:
         """Fallback to Groq chat helper, or conversational response if unreachable."""

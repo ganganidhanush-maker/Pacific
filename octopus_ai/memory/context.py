@@ -11,20 +11,27 @@ The memory module maintains context across interactions:
 
 from typing import Dict, Any, List, Optional
 from datetime import datetime
+from .persistent_memory import persistent_memory_instance, PersistentMemory
 
 
 class Memory:
     """
     Memory system for the Octopus AI Agent
     
-    Stores and retrieves context needed for multi-step tasks
+    Stores and retrieves context needed for multi-step tasks.
+    Backboned by SQLite PersistentMemory for cross-session continuity
+    and NotebookLM-style source grounding (RAG).
     """
     
     def __init__(self, max_history_length: int = 100):
         self.max_history_length = max_history_length
+        self.persistent: PersistentMemory = persistent_memory_instance
         
-        # Short-term memory
-        self.conversation_history: List[Dict[str, Any]] = []
+        # Short-term memory (pre-loaded from persistent SQLite store)
+        try:
+            self.conversation_history: List[Dict[str, Any]] = self.persistent.get_recent_history(limit=max_history_length)
+        except Exception:
+            self.conversation_history = []
         self.action_history: List[Dict[str, Any]] = []
         
         # Current state
@@ -39,30 +46,65 @@ class Memory:
         self.important_results: List[Dict[str, Any]] = []
     
     def store(self, key: str, value: Any) -> None:
-        """Store a value in memory"""
+        """Store a value in memory and persist to SQLite database."""
         self.variables[key] = value
+        try:
+            self.persistent.store_variable(key, value)
+        except Exception:
+            pass
     
     def retrieve(self, key: str, default: Any = None) -> Any:
-        """Retrieve a value from memory"""
-        return self.variables.get(key, default)
+        """Retrieve a value from memory or SQLite fallback."""
+        if key in self.variables:
+            return self.variables[key]
+        try:
+            val = self.persistent.retrieve_variable(key, default)
+            if val is not None:
+                self.variables[key] = val
+            return val
+        except Exception:
+            return default
     
-    def add_conversation(self, role: str, content: str) -> None:
+    def add_conversation(self, role: str, content: str, agent_name: str = "main") -> None:
         """
-        Add a conversation turn
-        
-        Args:
-            role: 'user' or 'assistant'
-            content: The message content
+        Add a conversation turn and persist to SQLite.
         """
-        self.conversation_history.append({
+        entry = {
             "role": role,
             "content": content,
+            "agent": agent_name,
             "timestamp": datetime.now().isoformat()
-        })
+        }
+        self.conversation_history.append(entry)
         
         # Trim if too long
         if len(self.conversation_history) > self.max_history_length:
             self.conversation_history = self.conversation_history[-self.max_history_length:]
+
+        # Persist to database
+        try:
+            self.persistent.add_message(role=role, content=content, agent_name=agent_name)
+        except Exception:
+            pass
+
+    # =========================================================================
+    # NOTEBOOKLM KNOWLEDGE BASE INTEGRATION
+    # =========================================================================
+    def index_document(self, file_path: str, tags: str = "notes") -> Dict[str, Any]:
+        """Index a local PDF, text, or code file into the persistent knowledge base."""
+        return self.persistent.index_local_file(file_path, tags=tags)
+
+    def query_knowledge_base(self, query: str, top_k: int = 3) -> List[Dict[str, Any]]:
+        """Retrieve grounded excerpts from indexed student/teacher materials."""
+        return self.persistent.query_knowledge_base(query, top_k=top_k)
+
+    async def generate_study_guide(self, source_id: int) -> Dict[str, Any]:
+        """Generate a NotebookLM-style comprehensive Study Guide."""
+        return await self.persistent.generate_notebooklm_study_guide(source_id)
+
+    async def generate_audio_overview(self, source_id: int) -> Dict[str, Any]:
+        """Generate a NotebookLM-style Audio Overview script for the Avatar."""
+        return await self.persistent.generate_audio_overview_script(source_id)
     
     def get_conversation_history(self, limit: int = 10) -> List[Dict[str, Any]]:
         """Get recent conversation history"""

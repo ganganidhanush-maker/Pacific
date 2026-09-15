@@ -66,4 +66,6 @@ octopus_ai/scratch/
 scratch/
 /*.mp4
 *.zip
+*.db
+octopus_ai/assets/data/
 
