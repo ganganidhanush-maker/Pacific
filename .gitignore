@@ -65,4 +65,5 @@ octopus_ai/assets/audio_cache/
 octopus_ai/scratch/
 scratch/
 /*.mp4
+*.zip
 

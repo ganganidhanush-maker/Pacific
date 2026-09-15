@@ -146,8 +146,11 @@ class LocalLLMService:
     ) -> str:
         """
         Generate chat response using high-intelligence reasoning.
-        Prioritizes Groq Cloud LLM (e.g. Qwen/Llama 70B) for ultra-fast, multi-lingual,
-        and deep responses, falling back smoothly to local Ollama (GPU-accelerated) or rule-based.
+        Prioritizes:
+        1. Kimi K3 ("Kiwi") / Moonshot AI (ultra-fast, 256K context, deep coding & educational reasoning)
+        2. Groq Cloud LLM (fastest inference, native multilingual/Telugu)
+        3. Local Ollama LLM (GPU-accelerated, offline private)
+        4. Rule-based conversational fallback
         """
         cleaned_prompt = prompt.strip()
         if not cleaned_prompt:
@@ -156,7 +159,37 @@ class LocalLLMService:
         sys_msg = system_override or SYSTEM_PROMPT
         loop = asyncio.get_event_loop()
 
-        # 1. High-Intelligence Groq Cloud Inference (fastest, most intelligent, native multilingual/Telugu)
+        # 1. Kimi K3 ("Kiwi") Moonshot Engine Integration (From Open Interpreter Blueprint)
+        try:
+            from octopus_ai.agent.kimi_llm import KimiLLM
+            kimi = KimiLLM()
+            if kimi.is_available and kimi.client:
+                messages = [{"role": "system", "content": sys_msg}]
+                if add_to_history:
+                    for msg in self.conversation_history[-self.max_history:]:
+                        messages.append(msg)
+                messages.append({"role": "user", "content": cleaned_prompt})
+
+                def _call_kimi():
+                    resp = kimi.client.chat.completions.create(
+                        model=kimi.model,
+                        messages=messages,
+                        temperature=0.6,
+                        max_tokens=1000
+                    )
+                    return resp.choices[0].message.content
+
+                kimi_reply = await loop.run_in_executor(None, _call_kimi)
+                if kimi_reply and kimi_reply.strip():
+                    clean_reply = sanitize_speech_response(kimi_reply.strip())
+                    if add_to_history:
+                        self.conversation_history.append({"role": "user", "content": cleaned_prompt})
+                        self.conversation_history.append({"role": "assistant", "content": clean_reply})
+                    return clean_reply
+        except Exception as kimi_err:
+            logger.info(f"[LocalLLM] Kimi K3 engine notice ({kimi_err}), checking Groq Cloud...")
+
+        # 2. High-Intelligence Groq Cloud Inference (fastest, most intelligent, native multilingual/Telugu)
         try:
             from octopus_ai.agent.groq_llm import GroqLLM
             groq = GroqLLM()

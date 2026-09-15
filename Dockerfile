@@ -1,9 +1,9 @@
 # Pacific / Octopus AI - Production Multi-Agent System Dockerfile
 # Python 3.11 with Google Chrome, FFmpeg, Xvfb and Audio Synthesis
 
-FROM ython:3.11-slim
+FROM python:3.11-slim
 
-ENV PYTHONDONTWRITEBY]CODE=1 \
+ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \

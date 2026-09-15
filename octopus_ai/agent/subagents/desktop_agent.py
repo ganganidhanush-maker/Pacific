@@ -223,6 +223,133 @@ class DesktopAgent:
             return {"success": False, "error": str(e)}
 
     # =========================================================================
+    # OPEN INTERPRETER SANDBOX RUNNER (Python & Terminal Execution Engine)
+    # =========================================================================
+    def execute_code(self, code: str, language: str = "python", timeout: int = 20) -> Dict[str, Any]:
+        """
+        Execute arbitrary code safely on user's machine (Open Interpreter blueprint).
+        Supports Python execution with timeout and output capture for Students & Teachers.
+        """
+        import tempfile
+        import time
+
+        if language.lower() not in ["python", "py"]:
+            return {
+                "success": False,
+                "error": f"Language '{language}' not directly supported for inline execution. Use 'python'."
+            }
+
+        start_time = time.time()
+        # Create a clean temporary script in scratch or tempdir
+        scratch_dir = os.path.join(str(Path(__file__).resolve().parent.parent.parent), "scratch")
+        os.makedirs(scratch_dir, exist_ok=True)
+        temp_script = os.path.join(scratch_dir, f"sandbox_{int(time.time()*1000)}.py")
+
+        try:
+            with open(temp_script, "w", encoding="utf-8") as f:
+                f.write(code)
+
+            python_exe = sys.executable
+            res = subprocess.run(
+                [python_exe, temp_script],
+                capture_output=True,
+                text=True,
+                timeout=timeout
+            )
+            elapsed = round(time.time() - start_time, 3)
+
+            output_text = res.stdout.strip()
+            err_text = res.stderr.strip()
+
+            summary = output_text if output_text else (f"Error: {err_text}" if err_text else "Code executed with no output.")
+            return {
+                "success": res.returncode == 0,
+                "action": "execute_code",
+                "language": language,
+                "duration_seconds": elapsed,
+                "stdout": output_text,
+                "stderr": err_text,
+                "returncode": res.returncode,
+                "output": summary,
+                "message": f"Executed {language} code in {elapsed}s: {summary[:200]}"
+            }
+        except subprocess.TimeoutExpired:
+            return {
+                "success": False,
+                "action": "execute_code",
+                "error": f"Code execution timed out after {timeout} seconds.",
+                "message": f"Execution timed out after {timeout} seconds."
+            }
+        except Exception as e:
+            return {
+                "success": False,
+                "action": "execute_code",
+                "error": str(e),
+                "message": f"Failed to execute code: {e}"
+            }
+        finally:
+            if os.path.exists(temp_script):
+                try:
+                    os.remove(temp_script)
+                except Exception:
+                    pass
+
+    def execute_terminal_command(self, command: str, timeout: int = 20) -> Dict[str, Any]:
+        """
+        Execute terminal / PowerShell command safely with guardrails against destructive operations.
+        """
+        import time
+
+        # Guardrails: block destructive system commands
+        BLOCKED_KEYWORDS = [
+            "format ", "del /f /s /q c:", "rmdir /s /q c:", "diskpart",
+            ":(){ :|:& };:", "drop database", "drop table", "shutdown /r /t 0"
+        ]
+        cmd_lower = command.lower()
+        for blk in BLOCKED_KEYWORDS:
+            if blk in cmd_lower:
+                return {
+                    "success": False,
+                    "action": "execute_terminal_command",
+                    "error": f"Command rejected by Octopus AI Safety Guardrails: contains hazardous instruction '{blk}'.",
+                    "message": "Dangerous command blocked for safety."
+                }
+
+        start_time = time.time()
+        try:
+            shell_cmd = ["powershell", "-NoProfile", "-Command", command] if sys.platform == "win32" else ["bash", "-c", command]
+            res = subprocess.run(shell_cmd, capture_output=True, text=True, timeout=timeout)
+            elapsed = round(time.time() - start_time, 3)
+
+            out = res.stdout.strip()
+            err = res.stderr.strip()
+            return {
+                "success": res.returncode == 0,
+                "action": "execute_terminal_command",
+                "command": command,
+                "duration_seconds": elapsed,
+                "stdout": out,
+                "stderr": err,
+                "returncode": res.returncode,
+                "output": out or err or "Command finished with no output.",
+                "message": f"Executed command in {elapsed}s: {(out or err)[:200]}"
+            }
+        except subprocess.TimeoutExpired:
+            return {
+                "success": False,
+                "action": "execute_terminal_command",
+                "error": f"Command timed out after {timeout} seconds.",
+                "message": f"Command timed out after {timeout} seconds."
+            }
+        except Exception as e:
+            return {
+                "success": False,
+                "action": "execute_terminal_command",
+                "error": str(e),
+                "message": f"Command execution error: {e}"
+            }
+
+    # =========================================================================
     # APPLICATION LAUNCHING & WINDOWS CONTROL
     # =========================================================================
     def launch_application(self, app_key_or_name: str, args: Optional[List[str]] = None) -> Dict[str, Any]:
@@ -707,8 +834,12 @@ if __name__ == "__main__":
             content = params.get("content", "# Created by Octopus AI Desktop Agent\n")
             return self.touch_file(fp, content)
 
-        # 12. Run Python Script
-        if "run" in cmd_lower and ".py" in cmd_lower:
+        # 12. Run Python Script or Inline Code (Open Interpreter Sandbox)
+        if "run" in cmd_lower and (".py" in cmd_lower or "code" in cmd_lower or "python" in cmd_lower):
+            inline_code = params.get("code")
+            if inline_code:
+                return self.execute_code(inline_code, language=params.get("language", "python"))
+
             script_candidate = params.get("path") or params.get("script_path")
             if script_candidate and str(script_candidate).endswith(".py") and os.path.exists(str(script_candidate)):
                 return self.execute_python_script(str(script_candidate))
@@ -722,6 +853,18 @@ if __name__ == "__main__":
                 clean_tok = token.strip('"\'')
                 if clean_tok.endswith(".py") and os.path.exists(clean_tok):
                     return self.execute_python_script(clean_tok)
+
+        # 13. Terminal / PowerShell Execution (Open Interpreter Shell Runner)
+        if any(w in cmd_lower for w in ["execute command", "run command", "terminal command", "exec terminal"]):
+            term_cmd = params.get("command")
+            if not term_cmd:
+                for prefix in ["execute command", "run command", "terminal command", "exec terminal"]:
+                    if prefix in cmd_lower:
+                        idx = cmd_lower.find(prefix) + len(prefix)
+                        term_cmd = command[idx:].strip(" :\"'")
+                        break
+            if term_cmd:
+                return self.execute_terminal_command(term_cmd)
 
         return {"success": False, "message": f"Unrecognized desktop command: {command}"}
 

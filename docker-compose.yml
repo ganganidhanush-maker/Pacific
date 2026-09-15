@@ -14,8 +14,11 @@ services:
       - BROWSER_HEADLESS=true
       - IN_DOCKER=1
       - DISPLAY=:99
-      - GROQ_API_KEY=${GROQ_API_KEY:+}
-      - GROQ_MODEL=${GROQ_MODEL-llama-3.3-70b-versatile}
+      - GROQ_API_KEY=${GROQ_API_KEY:-}
+      - GROQ_MODEL=${GROQ_MODEL:-llama-3.3-70b-versatile}
+      - KIMI_API_KEY=${KIMI_API_KEY:-}
+      - MOONSHOT_API_KEY=${MOONSHOT_API_KEY:-}
+      - KIMI_MODEL=${KIMI_MODEL:-kimi-k3}
     volumes:
       - ./octopus_ai/assets/audio_cache:/app/octopus_ai/assets/audio_cache
       - chrome-data:/app/chrome-data

@@ -15,7 +15,7 @@ Anyone who forks this repository can run the application seamlessly using either
 
 ### Option A: Run Natively with Python (Windows / macOS / Linux)
 
-`ash
+```bash
 # 1. Clone your fork
 git clone https://github.com/<your-username>/Pacific.git
 cd Pacific
@@ -32,7 +32,7 @@ pip install -r requirements.txt
 
 # 4. Launch Octopus AI!
 python main.py
-`
+```
 > *On desktop operating systems, a native frameless window opens automatically. On headless systems, it opens in your default browser at http://localhost:8000.*
 
 ---
@@ -41,14 +41,14 @@ python main.py
 
 No local Python, Chrome, or virtual environment setup required:
 
-`ash
+```bash
 # 1. Clone your fork
 git clone https://github.com/<your-username>/Pacific.git
 cd Pacific
 
 # 2. Build and start container
 docker compose up --build
-`
+```
 > *Once started, open your browser and navigate to **[http://localhost:8000](http://localhost:8000)**.*
 
 ---
@@ -59,49 +59,41 @@ Select any agent from the **9-Dots Menu** in the top right, or switch dynamicall
 
 | Agent | Icon | Role & Scope | Slash Command |
 |---|---|---|---|
-| **Main Agent** | 🧠 | **Avatar Brain & Master Orchestrator** (Default)<br>Decomposes natural teacher/student requests into multi-agent plans. | /main |
-| **Web Agent** | 🌐 | **Chrome Web Automations**<br>WhatsApp broadcasts, on-topic filtering, Canva slide generation, Instagram, and web search. | /web or /whatsapp or /canva |
-| **Desktop Agent** | 💻 | **Local System & Filesystem Manager**<br>Finds local documents (.pdf, .py), touches/moves/organizes files, and launches native apps. | /desktop |
-| **Research Agent** | 🔬 | **Academic Knowledge & Slide Outlines**<br>Synthesizes topics and generates complete slide-by-slide presentation decks. | /research |
-| **Chatbot Agent** | 💬 | **Student & Teacher Assistant**<br>Interactive conversational tutor for concept explanation and lesson planning. | /chatbot |
+| **Main Agent** | 🧠 | **Avatar Brain & Master Orchestrator** (Default)<br>Decomposes natural teacher/student requests into multi-agent plans. | `/main` |
+| **Web Agent** | 🌐 | **Chrome Web Automations**<br>WhatsApp broadcasts (e.g. Teacher PTM updates), on-topic filtering, Canva slide generation, Instagram, and web search. | `/web` or `/whatsapp` or `/canva` |
+| **Desktop Agent** | 💻 | **Open Interpreter Execution & Local Files**<br>Interactive Python sandbox, safe terminal execution, finding local documents (.pdf, .py), and launching native apps. | `/desktop` |
+| **Research Agent** | 🔬 | **Academic Knowledge & Slide Outlines**<br>Synthesizes lecture topics and generates complete slide-by-slide presentation decks. | `/research` |
+| **Chatbot Agent** | 💬 | **Student & Teacher Assistant**<br>Interactive conversational tutor with native multilingual Telugu & English reasoning. | `/chatbot` |
 
 ---
 
-## 🏗️ Architecture
+## 🚀 Open Interpreter & Kimi K3 ("Kiwi") Blueprint Integration
 
-`
-User Input (Audio / Text)
-         │
-         ▼
-┌────────────────────────────────────────┐
-│   MAIN AGENT: Avatar Brain             │
-│   • Frameless Video Avatar (3 Layers)  │
-│   • AI Prompt Optimizer (Ollama/Groq)  │
-│   • Neural Voice (Chatterbox/Edge-TTS) │
-└───────────────────┬────────────────────┘
-                    │  Orchestration Plan
-         ┌──────────┼──────────┬──────────┐
-         ▼          ▼          ▼          ▼
-     🌐 Web     💻 Desktop  🔬 Research 💬 Chatbot
-     Agent       Agent      Agent       Agent
-     (Chrome)    (Local OS) (Knowledge) (Tutor)
-`
+Octopus AI leverages core architectural patterns inspired by **Open Interpreter**:
+
+1. **Kimi K3 ("Kiwi") Engine**: Support for Moonshot Platform API (`kimi-k3` model) providing 256K context window, 10x lower cost, and high-speed coding and academic reasoning.
+2. **Interactive Code & Terminal Sandbox**: Desktop Agent can execute arbitrary Python scripts and PowerShell/bash commands safely with timeout and security guardrails.
+3. **Modular Educational Skills (`skills/`)**:
+   - `whatsapp_ptm_broadcast`: Automated teacher broadcasts and context-filtered replies.
+   - `academic_study_deck`: Textbook chapter ingestion (256k context) and revision deck generation.
+   - `python_code_sandbox`: Computer science lab exercises, execution, and instant error diagnosis.
 
 ---
 
-## 🛠️ Configuration & Optional Features
+## 🛠️ Configuration & LLM Providers
 
-Octopus AI is built to work out of the box with zero required configuration. To unlock additional capabilities:
+Octopus AI is built to work out of the box with zero required configuration, featuring an intelligent 4-tier model hierarchy:
 
-- **Local LLM GPU Acceleration**: Install [Ollama](https://ollama.com) and run ollama pull llama3.2. Octopus AI automatically connects to Ollama on http://127.0.0.1:11434.
-- **Cloud LLM Fallback (Groq)**: Create a .env file and specify GROQ_API_KEY=your_key_here.
-- **Hardware Acceleration**: If an NVIDIA GPU is detected, PyTorch with CUDA will automatically accelerate neural voice synthesis.
+1. **Tier 1: Kimi K3 ("Kiwi")**: Set `KIMI_API_KEY=your_key` or `MOONSHOT_API_KEY=your_key` in `.env` (256k context, ultra-fast).
+2. **Tier 2: Groq Cloud LLM**: Set `GROQ_API_KEY=your_key` in `.env` (Qwen/Llama 70B, multilingual Telugu).
+3. **Tier 3: Local GPU Ollama**: Install [Ollama](https://ollama.com) and run `ollama pull llama3.2` (100% offline, private).
+4. **Tier 4: Offline Conversational Fallback**: Graceful heuristic responses even when completely offline.
 
 ---
 
 ## 📂 Project Structure
 
-`
+```
 Pacific/
 ├── main.py                     # Root entry point
 ├── Dockerfile                  # Production container definition
@@ -112,14 +104,16 @@ Pacific/
     ├── orb-ui.html             # Video Avatar & 9-Dots UI
     ├── agent/
     │   ├── orchestrator.py     # Master Orchestrator & Prompt Optimizer
+    │   ├── kimi_llm.py         # Kimi K3 ("Kiwi") Moonshot API Engine
     │   └── subagents/          # Web, Desktop, Research, Chatbot agents
+    ├── skills/                 # Educational Skills (WhatsApp PTM, Study Decks, Code Tutor)
     ├── automations/            # WhatsApp, Canva, Instagram, Desktop tasks
     ├── server/                 # FastAPI server, local LLM, and voice services
     └── assets/
         ├── videos/             # Studio seamless avatar layers (idle, thinking, speaking)
         ├── voice_reference/    # Reference voice embeddings
         └── audio_cache/        # Cached neural speech files
-`
+```
 
 ---
 
