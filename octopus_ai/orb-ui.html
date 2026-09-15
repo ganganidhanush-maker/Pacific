@@ -372,6 +372,8 @@
     align-items:center;
     justify-content:center;
     gap:8px;
+    white-space:pre-line;
+    line-height:1.4;
   }
   .status-dot{
     width:7px;
@@ -896,6 +898,42 @@ closeSettingsModal.addEventListener('click', () => settingsModal.classList.remov
 settingsModal.addEventListener('click', (e) => {
   if (e.target === settingsModal) settingsModal.classList.remove('open');
 });
+
+// Live Auto-Update & Continuous Sync
+let lastBootId = null;
+let lastUiMtime = null;
+
+async function checkLiveUpdates() {
+  try {
+    const res = await fetch('/api/live-status');
+    if (!res.ok) return;
+    const data = await res.json();
+
+    if (lastBootId === null) {
+      lastBootId = data.boot_id;
+      lastUiMtime = data.ui_mtime;
+      return;
+    }
+
+    // Detect if backend restarted with updated code or if UI file changed
+    if (data.boot_id !== lastBootId || data.ui_mtime !== lastUiMtime) {
+      console.log('[Auto-Update] Detected project code update! Refreshing application state...');
+      lastBootId = data.boot_id;
+      lastUiMtime = data.ui_mtime;
+
+      if (!isSubmitting && !isListening && currentState === 'idle') {
+        statusText.textContent = '🔄 Code updated live! Reconnecting...';
+        setTimeout(() => {
+          window.location.reload();
+        }, 1000);
+      }
+    }
+  } catch (err) {
+    // Server is restarting during hot reload - ignore and wait for next tick
+  }
+}
+
+setInterval(checkLiveUpdates, 2000);
 </script>
 
 </body>

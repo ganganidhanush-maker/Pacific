@@ -115,6 +115,39 @@ class WebAgent:
         except Exception as e:
             return {"success": False, "error": str(e)}
 
+    async def send_whatsapp_message(
+        self,
+        contact: str,
+        message: str,
+        selected_contact: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Send a direct WhatsApp message to a named contact with multi-match detection.
+        """
+        driver = self.get_driver()
+        if not driver:
+            return {"success": False, "error": "Chrome driver unavailable"}
+
+        try:
+            from octopus_ai.automations.web.whatsapp import WhatsAppAutomation
+            auto = WhatsAppAutomation(driver=driver)
+            res = await auto.run({
+                "action": "send",
+                "contact": contact,
+                "message": message,
+                "selected_contact": selected_contact
+            })
+            data = res.data or {}
+            return {
+                "success": res.success,
+                "message": res.message,
+                "data": data,
+                "disambiguation_required": data.get("disambiguation_required", False),
+                "matches": data.get("matches", [])
+            }
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
     async def mark_chat_as_unread(self, contact_or_group_name: str) -> bool:
         """
         Mark a specific chat as unread in WhatsApp Web so the teacher can review it later.

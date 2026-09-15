@@ -62,34 +62,79 @@ class WhatsAppAutomation(BaseAutomation):
             except Exception:
                 self.emit_step(2, "Session Check Completed", "Proceeding with current view", "done")
 
+            selected_contact = params.get("selected_contact", "")
+
             # Step 3: Perform specific action
-            if action == "send" and contact and message:
-                self.emit_step(3, f"Finding Contact: {contact}", f"Searching for '{contact}' in chat list", "running")
+            if action == "send" and (contact or selected_contact) and message:
+                search_target = selected_contact or contact
+                self.emit_step(3, f"Finding Contact: {search_target}", f"Searching for '{search_target}' in chat list", "running")
                 # Search contact
-                search_boxes = self.driver.find_elements(By.XPATH, "//div[@contenteditable='true'][@data-tab='3']")
+                search_boxes = self.driver.find_elements(By.XPATH, "//div[@contenteditable='true'][@data-tab='3'] | //div[@role='textbox']")
                 if search_boxes:
                     search_box = search_boxes[0]
                     search_box.click()
                     search_box.send_keys(Keys.CONTROL + "a")
                     search_box.send_keys(Keys.BACKSPACE)
-                    search_box.send_keys(contact)
-                    time.sleep(2)
-                    search_box.send_keys(Keys.ENTER)
-                    time.sleep(1)
-                    self.emit_step(3, "Contact Selected", f"Opened chat with {contact}", "done")
+                    time.sleep(0.2)
+                    search_box.send_keys(search_target)
+                    time.sleep(1.8)
+
+                    # If no specific contact was pre-selected, check for multiple matches in sidebar
+                    if not selected_contact:
+                        matching_contacts = []
+                        seen = set()
+                        spans = self.driver.find_elements(By.XPATH, "//div[@id='pane-side']//span[@title]")
+                        for s in spans:
+                            t = (s.get_attribute("title") or s.text or "").strip()
+                            if t and t not in seen:
+                                seen.add(t)
+                                if contact.lower() in t.lower():
+                                    matching_contacts.append(t)
+
+                        # If multiple matches found (e.g. 2+ Harsha contacts), request disambiguation
+                        if len(matching_contacts) > 1:
+                            self.emit_step(3, "Multiple Contacts Found", f"Found {len(matching_contacts)} contacts matching '{contact}'", "done")
+                            preview.finish_automation(True, f"Found {len(matching_contacts)} contacts matching '{contact}'")
+                            return AutomationResult(
+                                success=True,
+                                message=f"Found {len(matching_contacts)} contacts matching '{contact}'. Clarification required.",
+                                data={
+                                    "disambiguation_required": True,
+                                    "matches": matching_contacts,
+                                    "contact_query": contact,
+                                    "pending_message": message
+                                }
+                            )
+
+                        target_name = matching_contacts[0] if matching_contacts else contact
+                    else:
+                        target_name = selected_contact
+
+                    # Select the target contact
+                    target_spans = self.driver.find_elements(By.XPATH, f"//div[@id='pane-side']//span[@title='{target_name}']")
+                    if target_spans:
+                        target_spans[0].click()
+                    else:
+                        search_box.send_keys(Keys.ENTER)
+                    time.sleep(1.2)
+                    self.emit_step(3, "Contact Selected", f"Opened chat with {target_name}", "done")
 
                     # Type and send message
                     self.emit_step(4, "Typing Message", f"Sending: '{message}'", "running")
-                    msg_boxes = self.driver.find_elements(By.XPATH, "//div[@contenteditable='true'][@data-tab='10']")
+                    msg_boxes = self.driver.find_elements(By.XPATH, "//div[@contenteditable='true'][@data-tab='10'] | //footer//div[@contenteditable='true']")
                     if msg_boxes:
                         msg_box = msg_boxes[0]
                         msg_box.click()
                         msg_box.send_keys(message)
                         time.sleep(0.5)
                         msg_box.send_keys(Keys.ENTER)
-                        self.emit_step(4, "Message Sent", f"Delivered to {contact}", "done")
-                        preview.finish_automation(True, f"Sent message to {contact}")
-                        return AutomationResult(success=True, message=f"Message sent to {contact}")
+                        self.emit_step(4, "Message Sent", f"Delivered to {target_name}", "done")
+                        preview.finish_automation(True, f"Sent message to {target_name}")
+                        return AutomationResult(
+                            success=True,
+                            message=f"Message sent to {target_name}",
+                            data={"recipient": target_name, "message": message}
+                        )
                     else:
                         self.emit_step(4, "Message Box Not Found", "Could not locate chat input", "error")
                 else:

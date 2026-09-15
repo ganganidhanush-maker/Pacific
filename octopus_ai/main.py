@@ -138,7 +138,7 @@ def prepare_main_profile() -> tuple[str, str]:
 
 
 
-def main(initial_agent: str = "main"):
+def main(initial_agent: str = "main", reload: bool = True):
     """Main entry point for Octopus AI Desktop Agent Tool."""
     try:
         from server.app import AVAILABLE_AGENTS
@@ -151,7 +151,7 @@ def main(initial_agent: str = "main"):
         print(f"[OctopusAI] Agent init notice: {e}")
 
     from octopus_ai.interface.desktop_app import run_desktop_app
-    run_desktop_app()
+    run_desktop_app(reload=reload)
 
 
 def run_demo():
@@ -210,4 +210,5 @@ if __name__ == "__main__":
             idx = sys.argv.index("--agent")
             if idx + 1 < len(sys.argv):
                 initial_agent = sys.argv[idx + 1].strip().lower()
-        main(initial_agent=initial_agent)
+        reload_flag = "--no-reload" not in sys.argv
+        main(initial_agent=initial_agent, reload=reload_flag)

@@ -27,10 +27,10 @@ def is_port_in_use(port: int, host: str = "127.0.0.1") -> bool:
         return s.connect_ex((check_host, port)) == 0
 
 
-def run_desktop_app(host: str = None, port: int = None):
-    """Start local API server and launch the native desktop tool application window."""
-    import uvicorn
-    from octopus_ai.server.app import app
+def run_desktop_app(host: str = None, port: int = None, reload: bool = True):
+    """Start local API server with live auto-reloading and launch the native desktop tool application window."""
+    import atexit
+    import subprocess
 
     # Resolve host and port dynamically
     is_docker = os.path.exists("/.dockerenv") or os.environ.get("IN_DOCKER", "").lower() in ("true", "1", "yes")
@@ -39,15 +39,43 @@ def run_desktop_app(host: str = None, port: int = None):
     if port is None:
         port = int(os.environ.get("PORT", "8000"))
 
-    # Start FastAPI server in background thread if not already running
+    server_process = None
+
+    def cleanup_server():
+        nonlocal server_process
+        if server_process and server_process.poll() is None:
+            print("\n[OctopusAI] Terminating background server process...")
+            server_process.terminate()
+            try:
+                server_process.wait(timeout=3)
+            except Exception:
+                server_process.kill()
+            server_process = None
+
+    atexit.register(cleanup_server)
+
+    # Start FastAPI server in a managed reload subprocess if not already running
     if not is_port_in_use(port, host):
-        server_thread = threading.Thread(
-            target=lambda: uvicorn.run(app, host=host, port=port, log_level="warning"),
-            daemon=True
+        cmd = [
+            sys.executable, "-m", "uvicorn", "server.app:app",
+            "--host", host,
+            "--port", str(port),
+            "--log-level", "info"
+        ]
+        if reload:
+            cmd.extend([
+                "--reload",
+                "--reload-dir", str(repo_dir)
+            ])
+
+        server_process = subprocess.Popen(
+            cmd,
+            cwd=str(repo_dir),
+            env=os.environ.copy()
         )
-        server_thread.start()
+
         # Wait until port is open
-        for _ in range(50):
+        for _ in range(60):
             if is_port_in_use(port, host):
                 break
             time.sleep(0.1)
@@ -58,6 +86,7 @@ def run_desktop_app(host: str = None, port: int = None):
     print("       OCTOPUS AI — NATIVE DESKTOP AGENT TOOL")
     print("=" * 65)
     print(f"🚀 Octopus AI server active at: {url} (Bound to {host}:{port})")
+    print("   • Live Hot-Reloading: ENABLED (watches code, agents & UI)")
     print("   • Standalone Native Window (pywebview)")
     print("   • Frameless Video Avatar: Active")
     print("   • 9-Dots Multi-Agent Selector: Ready")
@@ -69,43 +98,41 @@ def run_desktop_app(host: str = None, port: int = None):
                   is_docker or \
                   (sys.platform != "win32" and not os.environ.get("DISPLAY"))
 
-    # If headless, containerized, or no X11 display, keep server alive in foreground
-    if is_headless:
-        print(f"\n[OctopusAI] Running in headless/container mode.")
-        print(f"[OctopusAI] Open your browser and visit: {url}")
-        print("[OctopusAI] Press Ctrl+C anytime to stop.\n")
-        try:
-            while True:
-                time.sleep(1)
-        except (KeyboardInterrupt, SystemExit):
-            print("\n[OctopusAI] Server shutting down.")
-            return
-
-    # In desktop environments, attempt pywebview native window
     try:
-        import webview
-        window = webview.create_window(
-            title="Octopus AI — Desktop Agent Tool",
-            url=url,
-            width=1080,
-            height=740,
-            min_size=(820, 600),
-            resizable=True
-        )
-        webview.start()
-    except Exception as e:
-        print(f"⚠️ Native window note: {e}. Opening in default browser fallback...")
-        try:
-            import webbrowser
-            webbrowser.open(url)
-        except Exception:
-            pass
-        print(f"\n[OctopusAI] Server running at {url}. Press Ctrl+C to stop.\n")
-        try:
+        # If headless, containerized, or no X11 display, keep server alive in foreground
+        if is_headless:
+            print(f"\n[OctopusAI] Running in headless/container mode with Live Auto-Reload.")
+            print(f"[OctopusAI] Open your browser and visit: {url}")
+            print("[OctopusAI] Press Ctrl+C anytime to stop.\n")
             while True:
                 time.sleep(1)
-        except (KeyboardInterrupt, SystemExit):
-            print("\n[OctopusAI] Server shutting down.")
+        else:
+            # In desktop environments, attempt pywebview native window
+            try:
+                import webview
+                window = webview.create_window(
+                    title="Octopus AI — Desktop Agent Tool",
+                    url=url,
+                    width=1080,
+                    height=740,
+                    min_size=(820, 600),
+                    resizable=True
+                )
+                webview.start()
+            except Exception as e:
+                print(f"⚠️ Native window note: {e}. Opening in default browser fallback...")
+                try:
+                    import webbrowser
+                    webbrowser.open(url)
+                except Exception:
+                    pass
+                print(f"\n[OctopusAI] Server running with Live Auto-Reload at {url}. Press Ctrl+C to stop.\n")
+                while True:
+                    time.sleep(1)
+    except (KeyboardInterrupt, SystemExit):
+        print("\n[OctopusAI] Server shutting down.")
+    finally:
+        cleanup_server()
 
 
 if __name__ == "__main__":

@@ -14,6 +14,7 @@ import sys
 import json
 import asyncio
 import hashlib
+import uuid
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 
@@ -114,6 +115,104 @@ AVAILABLE_AGENTS = [
         "greeting": "Chatbot Agent ready. How can I help with your studies or teaching today?"
     }
 ]
+
+# Conversational session state for multi-turn tasks (e.g. WhatsApp contact disambiguation)
+PENDING_SESSION_STATE: Dict[str, Any] = {}
+
+
+def classify_intent(user_msg: str, current_agent: str = "main") -> str:
+    """
+    Intelligent Intent Classifier:
+    Detects target agent from natural language keywords and commands.
+    """
+    msg_lower = user_msg.lower().strip()
+
+    # 1. Explicit slash / switch commands
+    if any(w in msg_lower for w in ["/desktop", "desktop agent", "switch to desktop"]):
+        return "desktop"
+    if any(w in msg_lower for w in ["/web", "/browser", "web agent", "switch to web"]):
+        return "web"
+    if any(w in msg_lower for w in ["/research", "research agent", "switch to research"]):
+        return "research"
+    if any(w in msg_lower for w in ["/chat", "/chatbot", "chatbot agent", "switch to chatbot"]):
+        return "chatbot"
+    if any(w in msg_lower for w in ["/main", "/orchestrator", "main agent", "switch to main"]):
+        return "main"
+
+    # 2. Desktop actions: Calculator, Notepad, assignment, Paint, Task Manager, file commands
+    desktop_triggers = [
+        "calculator", "calc", "notepad", "assignment", "paint", "mspaint",
+        "task manager", "taskmgr", "command prompt", "powershell", "terminal",
+        "file explorer", "explorer", "find file", "search file", "organize file",
+        "move file", "touch file", "local file", "open new notepad", "write the python assignment",
+        "python assignment", "system info", "tasklist", "pdf", "documents", "downloads"
+    ]
+    if (any(k in msg_lower for k in desktop_triggers) or
+        ("find" in msg_lower and ("file" in msg_lower or "doc" in msg_lower or "pdf" in msg_lower)) or
+        ("search" in msg_lower and ("file" in msg_lower or "doc" in msg_lower or "pdf" in msg_lower))):
+        return "desktop"
+
+    # 3. Web actions: WhatsApp, Canva, Instagram, Google, browser
+    web_triggers = [
+        "whatsapp", "canva", "instagram", "send message to", "message to",
+        "search google", "google search", "browse to", "open url", "youtube",
+        "open browser", "open chrome", "launch chrome", "broadcast", "ptm",
+        "open whatsapp", "open canva", "open instagram"
+    ]
+    if any(k in msg_lower for k in web_triggers):
+        return "web"
+
+    # 4. Research actions: slide outline, literature, study research
+    research_triggers = [
+        "research", "slide outline", "presentation outline", "synthesize topic",
+        "syllabus", "academic research", "literature"
+    ]
+    if any(k in msg_lower for k in research_triggers):
+        return "research"
+
+    # 5. Chatbot actions
+    chatbot_triggers = [
+        "explain", "teach me", "tutor", "quiz me", "lesson plan"
+    ]
+    if any(k in msg_lower for k in chatbot_triggers) and current_agent == "chatbot":
+        return "chatbot"
+
+    return current_agent
+
+
+def parse_whatsapp_request(user_msg: str) -> tuple:
+    """
+    Extract contact name and message from commands.
+    """
+    msg_lower = user_msg.lower()
+    contact = ""
+    message = ""
+
+    if "to " in msg_lower and " saying " in msg_lower:
+        after_to = user_msg.split("to ", 1)[1]
+        contact, message = after_to.split(" saying ", 1)
+    elif "to " in msg_lower and ":" in user_msg:
+        after_to = user_msg.split("to ", 1)[1]
+        contact, message = after_to.split(":", 1)
+    elif "to " in msg_lower and " that " in msg_lower:
+        after_to = user_msg.split("to ", 1)[1]
+        contact, message = after_to.split(" that ", 1)
+    elif "to " in msg_lower:
+        after_to = user_msg.split("to ", 1)[1]
+        for kw in [" on whatsapp", " in whatsapp", " in web", " on web"]:
+            after_to = after_to.replace(kw, "").replace(kw.upper(), "")
+        if " and " in after_to:
+            after_to = after_to.split(" and ", 1)[0]
+        contact = after_to.strip()
+        message = "Hello!"
+    else:
+        cleaned = user_msg
+        for kw in ["open whatsapp", "whatsapp web", "whatsapp", "in web", "send message", "message"]:
+            cleaned = cleaned.replace(kw, "").replace(kw.capitalize(), "")
+        contact = cleaned.strip()
+        message = "Hello!"
+
+    return contact.strip(), message.strip()
 
 
 async def generate_speech_file(text: str, voice: str = DEFAULT_VOICE) -> Optional[str]:
@@ -225,6 +324,25 @@ async def get_agents():
     }
 
 
+SERVER_BOOT_ID = str(uuid.uuid4())[:8]
+
+
+@app.get("/api/live-status")
+async def get_live_status():
+    """
+    Returns live server status, boot ID, and UI file modification time.
+    Used by client for automatic live synchronization when code updates.
+    """
+    ui_path = repo_dir / "orb-ui.html"
+    ui_mtime = ui_path.stat().st_mtime if ui_path.exists() else 0
+    return {
+        "status": "online",
+        "boot_id": SERVER_BOOT_ID,
+        "ui_mtime": ui_mtime,
+        "current_agent": CURRENT_AGENT
+    }
+
+
 @app.post("/api/tts")
 async def tts_endpoint(req: TTSRequest):
     """Generate or retrieve cached natural male speech audio."""
@@ -258,158 +376,190 @@ async def select_agent(req: SelectAgentRequest):
 @app.post("/api/chat")
 async def chat_endpoint(req: ChatRequest, background_tasks: BackgroundTasks):
     """
-    User command intake.
-    Handles slash commands (/main, /web, /whatsapp, /canva, /instagram) and natural phrases.
-    Routes general conversation to the Local LLM in Main Agent mode.
-    Automates Chrome actions in respective automation modes.
+    User command intake with Universal Intent Classification and Multi-Agent Auto-Switching.
+    Handles WhatsApp contact disambiguation multi-turn sessions.
+    Executes Windows desktop commands (calc, notepad, python assignment, file management).
+    Automates Chrome actions (WhatsApp, Canva, Instagram, Google).
     Synthesizes answers in Dhanush's cloned voice.
     """
-    global CURRENT_AGENT, registry_instance
+    global CURRENT_AGENT, registry_instance, PENDING_SESSION_STATE
     user_msg = req.message.strip()
     active_agent = req.agent or CURRENT_AGENT
     user_lower = user_msg.lower()
 
     response_text = ""
+    summary_text = ""
     triggered_action = None
 
-    # 1. UNIVERSAL COMMAND / AGENT SWITCH DETECTION
-    # Slash commands or explicit switch phrases
-    is_main_cmd = user_lower in ["/main", "/orchestrator", "main agent", "open main agent", "switch to main agent", "switch to main"]
-    is_web_cmd = user_lower in ["/web", "/browser", "web agent", "open web agent", "switch to web agent", "switch to web"]
-    is_desktop_cmd = user_lower in ["/desktop", "desktop agent", "open desktop agent", "switch to desktop agent", "switch to desktop"]
-    is_research_cmd = user_lower in ["/research", "research agent", "open research agent", "switch to research agent", "switch to research"]
-    is_chatbot_cmd = user_lower in ["/chat", "/chatbot", "chatbot agent", "open chatbot agent", "switch to chatbot agent", "switch to chatbot"]
+    # 1. MULTI-TURN PENDING STATE (e.g. WhatsApp contact disambiguation)
+    if PENDING_SESSION_STATE.get("type") == "whatsapp_disambiguation":
+        matches = PENDING_SESSION_STATE.get("matches", [])
+        pending_msg = PENDING_SESSION_STATE.get("pending_message", "Hello!")
+        selected_contact = None
 
-    # Shortcuts for web platforms
-    is_wa_cmd = user_lower in ["/whatsapp", "/wa", "whatsapp agent", "switch to whatsapp"]
-    is_wa_open = user_lower in ["open whatsapp", "open whatsapp web", "launch whatsapp"]
-    is_canva_cmd = user_lower in ["/canva", "/design", "canva agent", "switch to canva"]
-    is_canva_open = user_lower in ["open canva", "launch canva"]
-    is_ig_cmd = user_lower in ["/instagram", "/ig", "/insta", "instagram agent", "switch to instagram"]
-    is_ig_open = user_lower in ["open instagram", "launch instagram"]
-    is_web_open = user_lower in ["open browser", "open web", "launch chrome", "open chrome"]
+        user_clean = user_lower.strip()
+        for idx, match_name in enumerate(matches):
+            num_str = str(idx + 1)
+            if (user_clean == num_str or
+                user_clean == f"number {num_str}" or
+                user_clean == f"option {num_str}" or
+                (idx == 0 and "first" in user_clean) or
+                (idx == 1 and "second" in user_clean) or
+                (idx == 2 and "third" in user_clean) or
+                match_name.lower() in user_clean or
+                all(part.lower() in user_clean for part in match_name.split() if len(part) > 2)):
+                selected_contact = match_name
+                break
 
-    if is_main_cmd:
-        CURRENT_AGENT = "main"
-        response_text = "Main Agent active. What goal would you like me to coordinate for you?"
-        audio_url = await generate_speech_file(response_text)
-        return {"success": True, "response": response_text, "audio_url": audio_url, "current_agent": "main", "action": {"agent": "main", "action": "switch"}}
-
-    elif is_desktop_cmd:
-        CURRENT_AGENT = "desktop"
-        response_text = "Desktop Agent activated. Ready to search, move, and organize your local files."
-        audio_url = await generate_speech_file(response_text)
-        return {"success": True, "response": response_text, "audio_url": audio_url, "current_agent": "desktop", "action": {"agent": "desktop", "action": "switch"}}
-
-    elif is_research_cmd:
-        CURRENT_AGENT = "research"
-        response_text = "Research Agent activated. What topic would you like me to analyze or outline?"
-        audio_url = await generate_speech_file(response_text)
-        return {"success": True, "response": response_text, "audio_url": audio_url, "current_agent": "research", "action": {"agent": "research", "action": "switch"}}
-
-    elif is_chatbot_cmd:
-        CURRENT_AGENT = "chatbot"
-        response_text = "Chatbot Agent ready. How can I help with your studies or teaching today?"
-        audio_url = await generate_speech_file(response_text)
-        return {"success": True, "response": response_text, "audio_url": audio_url, "current_agent": "chatbot", "action": {"agent": "chatbot", "action": "switch"}}
-
-    elif is_wa_open:
-        CURRENT_AGENT = "web"
-        response_text = "Opening WhatsApp Web in Chrome."
-        triggered_action = {"agent": "web", "subsystem": "whatsapp", "action": "open"}
-        background_tasks.add_task(run_whatsapp_task, "", "")
-        audio_url = await generate_speech_file(response_text)
-        return {"success": True, "response": response_text, "audio_url": audio_url, "current_agent": "web", "action": triggered_action}
-
-    elif is_wa_cmd:
-        CURRENT_AGENT = "web"
-        response_text = "Web Agent active with WhatsApp focus. Tell me your message or groups to update."
-        audio_url = await generate_speech_file(response_text)
-        return {"success": True, "response": response_text, "audio_url": audio_url, "current_agent": "web", "action": {"agent": "web", "focus": "whatsapp"}}
-
-    elif is_canva_open:
-        CURRENT_AGENT = "web"
-        response_text = "Opening Canva in Chrome."
-        triggered_action = {"agent": "web", "subsystem": "canva", "action": "open"}
-        background_tasks.add_task(run_canva_task, "presentation")
-        audio_url = await generate_speech_file(response_text)
-        return {"success": True, "response": response_text, "audio_url": audio_url, "current_agent": "web", "action": triggered_action}
-
-    elif is_canva_cmd:
-        CURRENT_AGENT = "web"
-        response_text = "Web Agent active with Canva focus. What presentation should we create?"
-        audio_url = await generate_speech_file(response_text)
-        return {"success": True, "response": response_text, "audio_url": audio_url, "current_agent": "web", "action": {"agent": "web", "focus": "canva"}}
-
-    elif is_ig_open:
-        CURRENT_AGENT = "web"
-        response_text = "Opening Instagram in Chrome."
-        triggered_action = {"agent": "web", "subsystem": "instagram", "action": "open"}
-        background_tasks.add_task(run_instagram_task, "feed", "")
-        audio_url = await generate_speech_file(response_text)
-        return {"success": True, "response": response_text, "audio_url": audio_url, "current_agent": "web", "action": triggered_action}
-
-    elif is_ig_cmd:
-        CURRENT_AGENT = "web"
-        response_text = "Web Agent active with Instagram focus. What would you like to check?"
-        audio_url = await generate_speech_file(response_text)
-        return {"success": True, "response": response_text, "audio_url": audio_url, "current_agent": "web", "action": {"agent": "web", "focus": "instagram"}}
-
-    elif is_web_open or is_web_cmd:
-        CURRENT_AGENT = "web"
-        response_text = "Web Agent activated. Ready for browser tasks, WhatsApp, Canva, and Google."
-        if is_web_open:
-            background_tasks.add_task(run_web_task, "")
-        audio_url = await generate_speech_file(response_text)
-        return {"success": True, "response": response_text, "audio_url": audio_url, "current_agent": "web", "action": {"agent": "web", "action": "switch"}}
-
-    # 2. ROUTING BASED ON ACTIVE AGENT
-    summary_text = ""
-
-    if active_agent == "main":
-        # Check if the user message is an actionable automation task vs general conversation
-        is_actionable = any(kw in user_lower for kw in [
-            "whatsapp", "canva", "instagram", "broadcast", 
-            "ptm", "find file", "local file", "organize file", 
-            "move file", "touch file", "open canva", "open whatsapp", "open instagram",
-            "search google", "presentation deck", "create presentation"
-        ])
-
-        if is_actionable:
-            # Full Multi-Agent Prompt Optimization & Task Decomposition
-            try:
-                plan = await master_orchestrator_instance.optimize_and_decompose(user_msg)
-                exec_res = await master_orchestrator_instance.execute_plan(plan, user_msg)
-                raw_spoken = exec_res.get("spoken_response") or "I've organized the task across your sub-agents."
-                response_text = sanitize_speech_response(raw_spoken)
-                bullets = exec_res.get("summary_bullets", [])
-                if bullets:
-                    summary_text = "\n".join(f"• {b}" for b in bullets)
-                triggered_action = {"agent": "main", "plan": plan, "results": exec_res.get("subagent_results")}
-            except Exception as orch_err:
-                response_text = await local_llm_instance.generate_response(user_msg)
-                response_text = sanitize_speech_response(response_text)
-                triggered_action = {"agent": "main", "action": "fallback_chat"}
+        if selected_contact:
+            PENDING_SESSION_STATE.clear()
+            CURRENT_AGENT = "web"
+            res = await run_whatsapp_task(contact="", message=pending_msg, selected_contact=selected_contact)
+            response_text = f"Selected {selected_contact}. Message sent on WhatsApp: '{pending_msg}'"
+            triggered_action = {"agent": "web", "subsystem": "whatsapp", "action": "sent", "recipient": selected_contact}
+            audio_url = await generate_speech_file(response_text)
+            return {
+                "success": True,
+                "response": response_text,
+                "audio_url": audio_url,
+                "current_agent": "web",
+                "action": triggered_action
+            }
+        elif any(w in user_clean for w in ["cancel", "stop", "nevermind", "abort", "no"]):
+            PENDING_SESSION_STATE.clear()
+            response_text = "Cancelled WhatsApp message."
+            audio_url = await generate_speech_file(response_text)
+            return {
+                "success": True,
+                "response": response_text,
+                "audio_url": audio_url,
+                "current_agent": CURRENT_AGENT,
+                "action": {"action": "cancelled"}
+            }
         else:
-            # Direct conversational response to what the user wants!
-            response_text = await local_llm_instance.generate_response(user_msg)
-            response_text = sanitize_speech_response(response_text)
-            triggered_action = {"agent": "main", "action": "chat"}
+            # Did not match selection, clear state and proceed to classify as new command
+            PENDING_SESSION_STATE.clear()
 
-    elif active_agent == "desktop":
-        # Local Desktop File & OS Operations
+    # 2. UNIVERSAL INTENT CLASSIFICATION & AGENT AUTO-SWITCHING
+    target_agent = classify_intent(user_msg, active_agent)
+    CURRENT_AGENT = target_agent
+    active_agent = target_agent
+
+    # 3. DIRECT AGENT SWITCH COMMANDS
+    is_explicit_switch = user_lower in [
+        "/main", "/orchestrator", "main agent", "switch to main",
+        "/web", "/browser", "web agent", "switch to web",
+        "/desktop", "desktop agent", "switch to desktop",
+        "/research", "research agent", "switch to research",
+        "/chat", "/chatbot", "chatbot agent", "switch to chatbot"
+    ]
+
+    if is_explicit_switch:
+        greetings = {
+            "main": "Main Agent active. What goal would you like me to coordinate for you?",
+            "web": "Web Agent activated. Ready for WhatsApp, Canva, Instagram, and web automations.",
+            "desktop": "Desktop Agent activated. Ready to control Windows apps, assignments, and files.",
+            "research": "Research Agent activated. What topic would you like me to analyze or outline?",
+            "chatbot": "Chatbot Agent ready. How can I help with your studies or teaching today?"
+        }
+        response_text = greetings.get(CURRENT_AGENT, f"{CURRENT_AGENT.capitalize()} agent ready.")
+        audio_url = await generate_speech_file(response_text)
+        return {
+            "success": True,
+            "response": response_text,
+            "audio_url": audio_url,
+            "current_agent": CURRENT_AGENT,
+            "action": {"agent": CURRENT_AGENT, "action": "switch"}
+        }
+
+    # 4. ROUTING BASED ON CLASSIFIED AGENT
+    if active_agent == "desktop":
+        # Local Desktop Apps, Python Assignment in Notepad & File Operations
         try:
             d_res = await desktop_agent_instance.execute_task(user_msg)
-            if d_res.get("action") == "find_files":
+            action_type = d_res.get("action")
+            if action_type == "find_files":
                 count = d_res.get("count", 0)
                 response_text = f"Found {count} matching files on your computer."
                 if count > 0:
                     summary_text = "\n".join(f"• {f['name']} ({f['size_kb']} KB)" for f in d_res.get("files", [])[:8])
+            elif action_type == "open_notepad_with_content":
+                response_text = d_res.get("message", "Created Python assignment on your Desktop and opened it in Notepad.")
+            elif action_type == "launch_app":
+                response_text = d_res.get("message", "Opened application on your desktop.")
             else:
                 response_text = d_res.get("summary") or d_res.get("message") or "Desktop operation complete."
             triggered_action = {"agent": "desktop", "result": d_res}
         except Exception as desk_err:
             response_text = f"Desktop agent encountered a notice: {desk_err}"
+
+    elif active_agent == "web":
+        # Web Agent: WhatsApp with disambiguation, Canva, Instagram, Google Search
+        if "whatsapp" in user_lower or "message" in user_lower or "broadcast" in user_lower or "ptm" in user_lower:
+            if "broadcast" in user_lower or "ptm" in user_lower or "groups" in user_lower:
+                try:
+                    plan = await master_orchestrator_instance.optimize_and_decompose(user_msg)
+                    exec_res = await master_orchestrator_instance.execute_plan(plan, user_msg)
+                    response_text = sanitize_speech_response(exec_res.get("spoken_response") or "Broadcast sent on WhatsApp.")
+                    triggered_action = {"agent": "web", "subsystem": "whatsapp", "action": "broadcast"}
+                except Exception:
+                    response_text = "Opening WhatsApp to send broadcast update."
+                    background_tasks.add_task(run_whatsapp_task, "", "")
+            elif user_lower in ["open whatsapp", "open whatsapp web", "launch whatsapp", "/whatsapp", "/wa"]:
+                response_text = "Opening WhatsApp Web in Chrome."
+                triggered_action = {"agent": "web", "subsystem": "whatsapp", "action": "open"}
+                background_tasks.add_task(run_whatsapp_task, "", "")
+            else:
+                contact, message = parse_whatsapp_request(user_msg)
+                if not contact:
+                    contact = "Harsha"
+
+                try:
+                    wa_res = await run_whatsapp_task(contact=contact, message=message)
+                    if wa_res and wa_res.data and wa_res.data.get("disambiguation_required"):
+                        matches = wa_res.data.get("matches", [])
+                        PENDING_SESSION_STATE["type"] = "whatsapp_disambiguation"
+                        PENDING_SESSION_STATE["matches"] = matches
+                        PENDING_SESSION_STATE["pending_message"] = message
+                        PENDING_SESSION_STATE["contact"] = contact
+                        options_str = "\n".join(f"{i+1}. {m}" for i, m in enumerate(matches))
+                        response_text = f"I found {len(matches)} contacts matching '{contact}':\n{options_str}\nWhich one would you like to message?"
+                        triggered_action = {"agent": "web", "subsystem": "whatsapp", "action": "disambiguate", "matches": matches}
+                    elif wa_res and wa_res.success:
+                        response_text = wa_res.message
+                        triggered_action = {"agent": "web", "subsystem": "whatsapp", "action": "sent", "contact": contact}
+                    else:
+                        response_text = f"Opening WhatsApp in Chrome to message {contact}."
+                        triggered_action = {"agent": "web", "subsystem": "whatsapp", "contact": contact}
+                        background_tasks.add_task(run_whatsapp_task, contact, message)
+                except Exception:
+                    response_text = f"Opening WhatsApp in Chrome for {contact}."
+                    background_tasks.add_task(run_whatsapp_task, contact, message)
+
+        elif "canva" in user_lower or "design" in user_lower or "presentation" in user_lower:
+            topic = user_msg
+            for w in ["create", "design", "search", "template", "presentation", "for", "in canva", "canva"]:
+                topic = topic.replace(w, "").replace(w.capitalize(), "")
+            topic = topic.strip() or "presentation"
+            response_text = f"Opening Canva in Chrome for '{topic}' templates."
+            triggered_action = {"agent": "web", "subsystem": "canva", "query": topic}
+            background_tasks.add_task(run_canva_task, topic)
+
+        elif "instagram" in user_lower or "@" in user_msg:
+            action = "profile" if "@" in user_msg else "feed"
+            username = user_msg.split("@", 1)[1].split()[0].strip() if "@" in user_msg else ""
+            response_text = "Opening Instagram in Chrome."
+            triggered_action = {"agent": "web", "subsystem": "instagram", "username": username}
+            background_tasks.add_task(run_instagram_task, action, username)
+
+        else:
+            query = user_msg
+            for w in ["search", "find", "google", "look up", "browse"]:
+                query = query.replace(w, "").replace(w.capitalize(), "")
+            query = query.strip() or user_msg
+            response_text = f"Opening Google Chrome to search for '{query}'."
+            triggered_action = {"agent": "web", "query": query}
+            background_tasks.add_task(run_web_task, query)
 
     elif active_agent == "research":
         # Topic Research & Slide Outline Generation
@@ -432,61 +582,45 @@ async def chat_endpoint(req: ChatRequest, background_tasks: BackgroundTasks):
             c_res = await chatbot_agent_instance.chat(user_msg)
             response_text = c_res.get("response", "How can I help you today?")
             triggered_action = {"agent": "chatbot", "chat": True}
-        except Exception as chat_err:
+        except Exception:
             response_text = await local_llm_instance.generate_response(user_msg)
 
     else:
-        # Default: Web Agent (WhatsApp, Canva, Instagram, Google)
-        if "whatsapp" in user_lower or "message" in user_lower:
-            contact = ""
-            message = ""
-            if "to " in user_lower:
-                parts = user_msg.split("to ", 1)[1]
-                if ":" in parts:
-                    contact, message = parts.split(":", 1)
-                elif " saying " in parts:
-                    contact, message = parts.split(" saying ", 1)
-                else:
-                    contact = parts.strip()
-                    message = "Hello!"
-            else:
-                contact = user_msg.strip()
-            response_text = f"Opening WhatsApp in Chrome for {contact}."
-            triggered_action = {"agent": "web", "subsystem": "whatsapp", "contact": contact}
-            background_tasks.add_task(run_whatsapp_task, contact, message)
+        # Main Agent Orchestrator & Conversational AI
+        is_actionable = any(kw in user_lower for kw in [
+            "whatsapp", "canva", "instagram", "broadcast", 
+            "ptm", "find file", "local file", "organize file", 
+            "move file", "touch file", "open canva", "open whatsapp", "open instagram",
+            "search google", "presentation deck", "create presentation"
+        ])
 
-        elif "canva" in user_lower or "design" in user_lower or "presentation" in user_lower:
-            topic = user_msg
-            for w in ["create", "design", "search", "template", "presentation", "for", "in canva", "canva"]:
-                topic = topic.replace(w, "").replace(w.capitalize(), "")
-            topic = topic.strip() or "presentation"
-            response_text = f"Opening Canva in Chrome for '{topic}' templates."
-            triggered_action = {"agent": "web", "subsystem": "canva", "query": topic}
-            background_tasks.add_task(run_canva_task, topic)
-
-        elif "instagram" in user_lower or "@" in user_msg:
-            action = "profile" if "@" in user_msg else "feed"
-            username = user_msg.split("@", 1)[1].split()[0].strip() if "@" in user_msg else ""
-            response_text = f"Opening Instagram in Chrome."
-            triggered_action = {"agent": "web", "subsystem": "instagram", "username": username}
-            background_tasks.add_task(run_instagram_task, action, username)
-
+        if is_actionable:
+            try:
+                plan = await master_orchestrator_instance.optimize_and_decompose(user_msg)
+                exec_res = await master_orchestrator_instance.execute_plan(plan, user_msg)
+                raw_spoken = exec_res.get("spoken_response") or "I've organized the task across your sub-agents."
+                response_text = sanitize_speech_response(raw_spoken)
+                bullets = exec_res.get("summary_bullets", [])
+                if bullets:
+                    summary_text = "\n".join(f"• {b}" for b in bullets)
+                triggered_action = {"agent": "main", "plan": plan, "results": exec_res.get("subagent_results")}
+            except Exception:
+                response_text = await local_llm_instance.generate_response(user_msg)
+                response_text = sanitize_speech_response(response_text)
+                triggered_action = {"agent": "main", "action": "fallback_chat"}
         else:
-            query = user_msg
-            for w in ["search", "find", "google", "look up"]:
-                query = query.replace(w, "").replace(w.capitalize(), "")
-            query = query.strip() or user_msg
-            response_text = f"Opening Google Chrome to search for '{query}'."
-            triggered_action = {"agent": "web", "query": query}
-            background_tasks.add_task(run_web_task, query)
+            response_text = await local_llm_instance.generate_response(user_msg)
+            response_text = sanitize_speech_response(response_text)
+            triggered_action = {"agent": "main", "action": "chat"}
 
-    # 3. SYNTHESIZE SPEECH USING DHANUSH'S CLONED VOICE
+    # 5. SYNTHESIZE SPEECH USING DHANUSH'S CLONED VOICE
     response_text = sanitize_speech_response(response_text)
     audio_url = await generate_speech_file(response_text)
 
     return {
         "success": True,
         "response": response_text,
+        "summary": summary_text,
         "audio_url": audio_url,
         "current_agent": CURRENT_AGENT,
         "action": triggered_action
@@ -494,12 +628,18 @@ async def chat_endpoint(req: ChatRequest, background_tasks: BackgroundTasks):
 
 
 # Background tasks that launch the real Chrome browser:
-async def run_whatsapp_task(contact: str, message: str):
+async def run_whatsapp_task(contact: str, message: str, selected_contact: str = ""):
     eng = get_or_create_visible_engine()
     if eng and eng.get_driver():
         from octopus_ai.automations.web.whatsapp import WhatsAppAutomation
         auto = WhatsAppAutomation(driver=eng.get_driver())
-        await auto.run({"action": "send" if (contact and message) else "open", "contact": contact, "message": message})
+        return await auto.run({
+            "action": "send" if ((contact or selected_contact) and message) else "open",
+            "contact": contact,
+            "message": message,
+            "selected_contact": selected_contact
+        })
+    return None
 
 
 async def run_canva_task(query: str):
