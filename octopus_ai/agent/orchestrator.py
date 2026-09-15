@@ -108,9 +108,87 @@ class MasterOrchestrator:
 
         return plan
 
+    async def _execute_web_subtask(self, plan: Dict[str, Any], raw_prompt: str) -> Dict[str, Any]:
+        """Execute web automation tasks (WhatsApp, Canva, Instagram, search)."""
+        res: Dict[str, Any] = {"results": {}, "bullets": []}
+        try:
+            wa_ctx = plan.get("whatsapp_context")
+            if wa_ctx:
+                groups = wa_ctx.get("groups", ["Students Group", "Parents Group"])
+                topic = wa_ctx.get("topic", "PTM")
+                persona = wa_ctx.get("sender_persona", "Saiteja")
+                msg = f"Dear Parents and Students, kindly note that tomorrow's {topic.upper()} will be held as scheduled. Please reach out if you have any questions."
+                
+                broadcast_res = await self.web_agent.send_whatsapp_broadcast(groups, msg, sender_name=persona)
+                res["results"]["web_whatsapp"] = broadcast_res
+                res["bullets"].append(f"🌐 Web Agent: Broadcast sent to {len(groups)} group(s) as {persona}.")
+                res["bullets"].append(f"💬 Active Filter: Replies on '{topic}' will be answered; unrelated chats marked as unread.")
+
+            elif "canva_design" in plan.get("web_tasks", []):
+                topic = plan.get("research_tasks", ["presentation"])[0] if plan.get("research_tasks") else "presentation"
+                canva_res = await self.web_agent.open_canva_presentation(topic)
+                res["results"]["web_canva"] = canva_res
+                res["bullets"].append(f"🎨 Web Agent: Opened Canva presentation templates for '{topic}'.")
+
+            elif any("instagram" in str(t).lower() for t in plan.get("web_tasks", [])):
+                ig_res = await self.web_agent.open_instagram()
+                res["results"]["web_instagram"] = ig_res
+                res["bullets"].append("📸 Web Agent: Opened Instagram notifications.")
+        except Exception as e:
+            logger.error(f"[Orchestrator] Web subtask error: {e}")
+            res["results"]["web_error"] = str(e)
+            res["bullets"].append(f"⚠️ Web Agent Notice: {e}")
+        return res
+
+    async def _execute_research_subtask(self, plan: Dict[str, Any], raw_prompt: str) -> Dict[str, Any]:
+        """Execute academic research & slide outline tasks."""
+        res: Dict[str, Any] = {"results": {}, "bullets": []}
+        try:
+            tasks = plan.get("research_tasks", []) or [raw_prompt]
+            for r_task in tasks:
+                r_res = await self.research_agent.research_topic(r_task)
+                res["results"]["research"] = r_res
+                res["bullets"].append(f"🔬 Research Agent: Synthesized knowledge & slide concepts for '{r_task}'.")
+        except Exception as e:
+            logger.error(f"[Orchestrator] Research subtask error: {e}")
+            res["results"]["research_error"] = str(e)
+            res["bullets"].append(f"⚠️ Research Agent Notice: {e}")
+        return res
+
+    async def _execute_desktop_subtask(self, plan: Dict[str, Any], raw_prompt: str) -> Dict[str, Any]:
+        """Execute local filesystem and Open Interpreter code runner tasks."""
+        res: Dict[str, Any] = {"results": {}, "bullets": []}
+        loop = asyncio.get_event_loop()
+        p_lower = raw_prompt.lower()
+        try:
+            # If prompt requests executing code or running a command
+            if any(w in p_lower for w in ["run code", "execute code", "run python", "terminal command", "execute command"]):
+                desktop_res = await self.desktop_agent.execute_task(raw_prompt)
+                res["results"]["desktop_task"] = desktop_res
+                if desktop_res.get("success"):
+                    res["bullets"].append(f"💻 Desktop Agent: {desktop_res.get('message', 'Executed command.')}")
+                else:
+                    res["bullets"].append(f"⚠️ Desktop Agent: {desktop_res.get('error', 'Execution failed.')}")
+            else:
+                # Local file scan
+                exts = [".pdf"] if "pdf" in p_lower else ([".py"] if "python" in p_lower else None)
+                d_res = await loop.run_in_executor(
+                    None,
+                    lambda: self.desktop_agent.find_local_files(query="", extensions=exts, max_results=10)
+                )
+                res["results"]["desktop_files"] = d_res
+                count = len(d_res)
+                res["bullets"].append(f"💻 Desktop Agent: Scanned PC and found {count} related local file(s).")
+        except Exception as e:
+            logger.error(f"[Orchestrator] Desktop subtask error: {e}")
+            res["results"]["desktop_error"] = str(e)
+            res["bullets"].append(f"⚠️ Desktop Agent Notice: {e}")
+        return res
+
     async def execute_plan(self, plan: Dict[str, Any], raw_prompt: str) -> Dict[str, Any]:
         """
-        Execute the decomposed multi-agent plan and compile an executive summary.
+        Execute decomposed subagent tasks concurrently using dynamic parallelism (asyncio.gather).
+        Compiles an integrated executive summary for the Avatar Brain to speak aloud.
         """
         execution_report = {
             "plan": plan,
@@ -119,49 +197,36 @@ class MasterOrchestrator:
             "summary_bullets": []
         }
 
-        # 1. WHATSAPP / WEB AGENT EXECUTION
+        # Collect concurrent subagent coroutines
+        coros = []
+        labels = []
+
         if plan.get("requires_web"):
-            wa_ctx = plan.get("whatsapp_context")
-            if wa_ctx:
-                groups = wa_ctx.get("groups", ["Students Group", "Parents Group"])
-                topic = wa_ctx.get("topic", "PTM")
-                persona = wa_ctx.get("sender_persona", "Saiteja")
-                msg = f"Dear Parents and Students, kindly note that tomorrow's {topic.upper()} will be held as scheduled. Please reach out if you have any questions."
-                
-                # Launch WhatsApp broadcast
-                broadcast_res = await self.web_agent.send_whatsapp_broadcast(groups, msg, sender_name=persona)
-                execution_report["subagent_results"]["web_whatsapp"] = broadcast_res
-                execution_report["summary_bullets"].append(f"🌐 Web Agent: Broadcast sent to {len(groups)} group(s) as {persona}.")
-                execution_report["summary_bullets"].append(f"💬 Active Filter: Replies on '{topic}' will be answered; unrelated chats marked as unread.")
-            
-            elif "canva_design" in plan.get("web_tasks", []):
-                topic = plan.get("research_tasks", ["presentation"])[0] if plan.get("research_tasks") else "presentation"
-                canva_res = await self.web_agent.open_canva_presentation(topic)
-                execution_report["subagent_results"]["web_canva"] = canva_res
-                execution_report["summary_bullets"].append(f"🎨 Web Agent: Opened Canva presentation templates for '{topic}'.")
+            coros.append(self._execute_web_subtask(plan, raw_prompt))
+            labels.append("web")
 
-            elif any("instagram" in str(t).lower() for t in plan.get("web_tasks", [])):
-                ig_res = await self.web_agent.open_instagram()
-                execution_report["subagent_results"]["web_instagram"] = ig_res
-                execution_report["summary_bullets"].append("📸 Web Agent: Opened Instagram notifications.")
-
-        # 2. RESEARCH AGENT EXECUTION
         if plan.get("requires_research"):
-            for r_task in plan.get("research_tasks", []):
-                r_res = await self.research_agent.research_topic(r_task)
-                execution_report["subagent_results"]["research"] = r_res
-                execution_report["summary_bullets"].append(f"🔬 Research Agent: Synthesized knowledge & slide concepts for '{r_task}'.")
+            coros.append(self._execute_research_subtask(plan, raw_prompt))
+            labels.append("research")
 
-        # 3. DESKTOP AGENT EXECUTION
         if plan.get("requires_desktop"):
-            exts = [".pdf"] if "pdf" in raw_prompt.lower() else ([".py"] if "python" in raw_prompt.lower() else None)
-            d_res = self.desktop_agent.find_local_files(query="", extensions=exts, max_results=10)
-            execution_report["subagent_results"]["desktop_files"] = d_res
-            count = len(d_res)
-            execution_report["summary_bullets"].append(f"💻 Desktop Agent: Scanned PC and found {count} related local file(s).")
+            coros.append(self._execute_desktop_subtask(plan, raw_prompt))
+            labels.append("desktop")
 
-        # 4. CHATBOT AGENT (If pure conversational Q&A)
-        if not (plan.get("requires_web") or plan.get("requires_desktop") or plan.get("requires_research")):
+        # 1. DYNAMIC PARALLEL EXECUTION (Runs independent subagents simultaneously)
+        if coros:
+            results = await asyncio.gather(*coros, return_exceptions=True)
+            for label, res in zip(labels, results):
+                if isinstance(res, Exception):
+                    logger.error(f"[Orchestrator] Subagent '{label}' threw exception: {res}")
+                    execution_report["subagent_results"][f"{label}_error"] = str(res)
+                    execution_report["summary_bullets"].append(f"⚠️ {label.title()} Agent encountered an issue: {res}")
+                elif isinstance(res, dict):
+                    execution_report["subagent_results"].update(res.get("results", {}))
+                    execution_report["summary_bullets"].extend(res.get("bullets", []))
+
+        # 2. CHATBOT AGENT (If pure conversational Q&A without tool delegation)
+        else:
             chat_res = await self.chatbot_agent.chat(raw_prompt)
             execution_report["spoken_response"] = chat_res.get("response")
             execution_report["subagent_results"]["chat"] = chat_res
