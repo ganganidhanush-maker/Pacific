@@ -151,7 +151,7 @@ def main(initial_agent: str = "main", reload: bool = True):
         print(f"[OctopusAI] Agent init notice: {e}")
 
     from octopus_ai.interface.desktop_app import run_desktop_app
-    run_desktop_app(reload=reload)
+    run_desktop_app(reload=reload, initial_agent=initial_agent)
 
 
 def run_demo():

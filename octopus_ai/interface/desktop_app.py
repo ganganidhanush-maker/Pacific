@@ -27,7 +27,7 @@ def is_port_in_use(port: int, host: str = "127.0.0.1") -> bool:
         return s.connect_ex((check_host, port)) == 0
 
 
-def run_desktop_app(host: str = None, port: int = None, reload: bool = True):
+def run_desktop_app(host: str = None, port: int = None, reload: bool = True, initial_agent: str = "main"):
     """Start local API server with live auto-reloading and launch the native desktop tool application window."""
     import atexit
     import subprocess
@@ -68,17 +68,26 @@ def run_desktop_app(host: str = None, port: int = None, reload: bool = True):
                 "--reload-dir", str(repo_dir)
             ])
 
+        server_env = os.environ.copy()
+        if initial_agent:
+            server_env["OCTOPUS_INITIAL_AGENT"] = initial_agent
+
         server_process = subprocess.Popen(
             cmd,
             cwd=str(repo_dir),
-            env=os.environ.copy()
+            env=server_env
         )
 
         # Wait until port is open
         for _ in range(60):
+            if server_process and server_process.poll() is not None:
+                raise RuntimeError(f"Server process exited prematurely with code {server_process.poll()}")
             if is_port_in_use(port, host):
                 break
             time.sleep(0.1)
+
+        if not is_port_in_use(port, host):
+            raise RuntimeError(f"Server port {port} on {host} failed to open within timeout")
 
     display_host = "localhost" if host in ("0.0.0.0", "127.0.0.1") else host
     url = f"http://{display_host}:{port}"
@@ -86,7 +95,7 @@ def run_desktop_app(host: str = None, port: int = None, reload: bool = True):
     print("       OCTOPUS AI — NATIVE DESKTOP AGENT TOOL")
     print("=" * 65)
     print(f"🚀 Octopus AI server active at: {url} (Bound to {host}:{port})")
-    print("   • Live Hot-Reloading: ENABLED (watches code, agents & UI)")
+    print(f"   • Live Hot-Reloading: {'ENABLED (watches code, agents & UI)' if reload else 'DISABLED'}")
     print("   • Standalone Native Window (pywebview)")
     print("   • Frameless Video Avatar: Active")
     print("   • 9-Dots Multi-Agent Selector: Ready")
@@ -101,7 +110,7 @@ def run_desktop_app(host: str = None, port: int = None, reload: bool = True):
     try:
         # If headless, containerized, or no X11 display, keep server alive in foreground
         if is_headless:
-            print(f"\n[OctopusAI] Running in headless/container mode with Live Auto-Reload.")
+            print(f"\n[OctopusAI] Running in headless/container mode with Live Auto-Reload {'enabled' if reload else 'disabled'}.")
             print(f"[OctopusAI] Open your browser and visit: {url}")
             print("[OctopusAI] Press Ctrl+C anytime to stop.\n")
             while True:
@@ -126,7 +135,7 @@ def run_desktop_app(host: str = None, port: int = None, reload: bool = True):
                     webbrowser.open(url)
                 except Exception:
                     pass
-                print(f"\n[OctopusAI] Server running with Live Auto-Reload at {url}. Press Ctrl+C to stop.\n")
+                print(f"\n[OctopusAI] Server running at {url} (Live Auto-Reload {'enabled' if reload else 'disabled'}). Press Ctrl+C to stop.\n")
                 while True:
                     time.sleep(1)
     except (KeyboardInterrupt, SystemExit):

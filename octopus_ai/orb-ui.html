@@ -989,6 +989,19 @@ async function selectAgent(agentId) {
   }
 }
 
+const clientSessionId = (function() {
+  try {
+    let sid = localStorage.getItem('octopus_session_id');
+    if (!sid) {
+      sid = 'client_' + Math.random().toString(36).substring(2, 11) + '_' + Date.now().toString(36);
+      localStorage.setItem('octopus_session_id', sid);
+    }
+    return sid;
+  } catch (e) {
+    return 'client_' + Math.random().toString(36).substring(2, 11);
+  }
+})();
+
 // Execute Task (User Input)
 async function submitTask() {
   if (isSubmitting) return;
@@ -1010,7 +1023,7 @@ async function submitTask() {
     const res = await fetch('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message: text, agent: currentAgent })
+      body: JSON.stringify({ message: text, agent: currentAgent, session_id: clientSessionId })
     });
     const data = await res.json();
 
@@ -1117,6 +1130,8 @@ settingsModal.addEventListener('click', (e) => {
 // Live Auto-Update & Continuous Sync
 let lastBootId = null;
 let lastUiMtime = null;
+let pendingUpdate = false;
+let pendingData = null;
 
 async function checkLiveUpdates() {
   try {
@@ -1132,11 +1147,18 @@ async function checkLiveUpdates() {
 
     // Detect if backend restarted with updated code or if UI file changed
     if (data.boot_id !== lastBootId || data.ui_mtime !== lastUiMtime) {
-      console.log('[Auto-Update] Detected project code update! Refreshing application state...');
-      lastBootId = data.boot_id;
-      lastUiMtime = data.ui_mtime;
+      pendingUpdate = true;
+      pendingData = data;
+    }
 
+    if (pendingUpdate) {
       if (!isSubmitting && !isListening && currentState === 'idle') {
+        pendingUpdate = false;
+        if (pendingData) {
+          lastBootId = pendingData.boot_id;
+          lastUiMtime = pendingData.ui_mtime;
+        }
+        console.log('[Auto-Update] Detected project code update! Refreshing application state...');
         statusText.textContent = '🔄 Code updated live! Reconnecting...';
         setTimeout(() => {
           window.location.reload();

@@ -14,6 +14,16 @@ from ..base import BaseAutomation, AutomationCategory, AutomationResult, Automat
 from ..preview.preview_manager import PreviewManager
 
 
+def _xpath_literal(s: str) -> str:
+    """Safely represent a string as an XPath literal, handling single and double quotes."""
+    if "'" not in s:
+        return f"'{s}'"
+    if '"' not in s:
+        return f'"{s}"'
+    parts = s.split("'")
+    return "concat(" + ", \"'\", ".join(f"'{p}'" for p in parts) + ")"
+
+
 class WhatsAppAutomation(BaseAutomation):
     id = "whatsapp"
     name = "WhatsApp Web Automation"
@@ -111,7 +121,7 @@ class WhatsAppAutomation(BaseAutomation):
                         target_name = selected_contact
 
                     # Select the target contact
-                    target_spans = self.driver.find_elements(By.XPATH, f"//div[@id='pane-side']//span[@title='{target_name}']")
+                    target_spans = self.driver.find_elements(By.XPATH, f"//div[@id='pane-side']//span[@title={_xpath_literal(target_name)}]")
                     if target_spans:
                         target_spans[0].click()
                     else:

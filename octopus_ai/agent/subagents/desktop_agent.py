@@ -12,6 +12,8 @@ import sys
 import glob
 import shutil
 import logging
+import re
+import shlex
 import subprocess
 from pathlib import Path
 from typing import Dict, List, Any, Optional
@@ -241,20 +243,56 @@ class DesktopAgent:
             elif sys.platform == "darwin":
                 mac_app_map = {
                     "calculator": "Calculator",
+                    "calc": "Calculator",
                     "notepad": "TextEdit",
                     "paint": "Preview",
-                    "terminal": "Terminal"
+                    "terminal": "Terminal",
+                    "cmd": "Terminal",
+                    "powershell": "Terminal",
+                    "chrome": "Google Chrome",
+                    "edge": "Microsoft Edge",
+                    "browser": "Safari",
+                    "explorer": "Finder",
+                    "file explorer": "Finder",
+                    "files": "Finder",
+                    "vscode": "Visual Studio Code",
+                    "code": "Visual Studio Code"
                 }
-                app_name = mac_app_map.get(key, "TextEdit")
+                app_name = mac_app_map.get(key)
+                if not app_name:
+                    return {
+                        "success": False,
+                        "action": "launch_app",
+                        "error": f"Unsupported application '{app_key_or_name}' on macOS",
+                        "message": f"Unsupported application '{app_key_or_name}' on macOS"
+                    }
                 subprocess.Popen(["open", "-a", app_name] + (args or []))
             else:
                 linux_app_map = {
                     "calculator": "gnome-calculator",
+                    "calc": "gnome-calculator",
                     "notepad": "gedit",
                     "paint": "drawing",
-                    "terminal": "gnome-terminal"
+                    "terminal": "gnome-terminal",
+                    "cmd": "gnome-terminal",
+                    "powershell": "gnome-terminal",
+                    "chrome": "google-chrome",
+                    "edge": "microsoft-edge",
+                    "browser": "firefox",
+                    "explorer": "nautilus",
+                    "file explorer": "nautilus",
+                    "files": "nautilus",
+                    "vscode": "code",
+                    "code": "code"
                 }
-                bin_name = linux_app_map.get(key, "nano")
+                bin_name = linux_app_map.get(key)
+                if not bin_name:
+                    return {
+                        "success": False,
+                        "action": "launch_app",
+                        "error": f"Unsupported application '{app_key_or_name}' on Linux",
+                        "message": f"Unsupported application '{app_key_or_name}' on Linux"
+                    }
                 subprocess.Popen([bin_name] + (args or []))
 
             display_name = app_key_or_name.replace(".exe", "").replace("ms-", "").capitalize()
@@ -516,9 +554,18 @@ if __name__ == "__main__":
         if not os.path.exists(target_dir):
             target_dir = os.path.join(self.user_profile, "Documents")
         if not os.path.exists(target_dir):
-            target_dir = str(Path(__file__).resolve().parent.parent.parent)
+            if self.user_profile and os.path.exists(self.user_profile):
+                target_dir = self.user_profile
+            else:
+                target_dir = str(Path(__file__).resolve().parent.parent.parent)
 
+        base, ext = os.path.splitext(filename)
         file_path = os.path.join(target_dir, filename)
+        counter = 1
+        while os.path.exists(file_path):
+            filename = f"{base}_{counter}{ext}"
+            file_path = os.path.join(target_dir, filename)
+            counter += 1
 
         try:
             with open(file_path, "w", encoding="utf-8") as f:
@@ -558,7 +605,7 @@ if __name__ == "__main__":
 
         # 1. Notepad + Assignment / Content Creation
         if "notepad" in cmd_lower:
-            if any(w in cmd_lower for w in ["assignment", "python", "code", "write"]):
+            if any(w in cmd_lower for w in ["assignment", "python", "code"]):
                 topic = "Python Fundamentals & Data Structures"
                 assignment = self.generate_python_assignment(topic=topic)
                 return self.create_and_open_notepad(content=assignment, filename="python_assignment.py")
@@ -644,7 +691,7 @@ if __name__ == "__main__":
                 return self.open_file(fp)
 
             for app_key in WINDOWS_APPS:
-                if app_key in cmd_lower:
+                if re.search(r'\b' + re.escape(app_key) + r'\b', cmd_lower):
                     return self.launch_application(app_key)
 
             search_query = cmd_lower.replace("open", "").replace("launch", "").strip()
@@ -662,10 +709,19 @@ if __name__ == "__main__":
 
         # 12. Run Python Script
         if "run" in cmd_lower and ".py" in cmd_lower:
-            words = command.split()
-            for w in words:
-                if w.endswith(".py") and os.path.exists(w):
-                    return self.execute_python_script(w)
+            script_candidate = params.get("path") or params.get("script_path")
+            if script_candidate and str(script_candidate).endswith(".py") and os.path.exists(str(script_candidate)):
+                return self.execute_python_script(str(script_candidate))
+
+            try:
+                tokens = shlex.split(command, posix=False)
+            except Exception:
+                tokens = command.split()
+
+            for token in tokens:
+                clean_tok = token.strip('"\'')
+                if clean_tok.endswith(".py") and os.path.exists(clean_tok):
+                    return self.execute_python_script(clean_tok)
 
         return {"success": False, "message": f"Unrecognized desktop command: {command}"}
 

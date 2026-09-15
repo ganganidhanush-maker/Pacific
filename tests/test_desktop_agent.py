@@ -62,13 +62,21 @@ class TestDesktopAgent(unittest.TestCase):
 
     @patch("subprocess.Popen")
     def test_execute_task_notepad_assignment(self, mock_popen):
-        res = asyncio.run(self.agent.execute_task("open new notepad and write the Python Assignment there"))
-        self.assertTrue(res["success"])
-        self.assertEqual(res["action"], "open_notepad_with_content")
-        self.assertIn("python_assignment.py", res["filename"])
-        self.assertIn("Notepad", res["message"])
-        if res.get("path") and Path(res["path"]).exists():
-            Path(res["path"]).unlink()
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmpdir:
+            old_profile = self.agent.user_profile
+            self.agent.user_profile = tmpdir
+            try:
+                res = asyncio.run(self.agent.execute_task("open new notepad and write the Python Assignment there"))
+                self.assertTrue(res["success"])
+                self.assertEqual(res["action"], "open_notepad_with_content")
+                self.assertIn("python_assignment.py", res["filename"])
+                self.assertIn("Notepad", res["message"])
+                if res.get("path") and Path(res["path"]).exists():
+                    self.assertTrue(Path(res["path"]).resolve().is_relative_to(Path(tmpdir).resolve()))
+                    Path(res["path"]).unlink()
+            finally:
+                self.agent.user_profile = old_profile
 
     def test_find_local_files(self):
         files = self.agent.find_local_files(query="", extensions=[".py"], max_results=5)

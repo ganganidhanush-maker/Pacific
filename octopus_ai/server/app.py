@@ -15,6 +15,9 @@ import json
 import asyncio
 import hashlib
 import uuid
+import re
+import time
+import concurrent.futures
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 
@@ -71,7 +74,47 @@ registry_instance = None
 preview_manager = PreviewManager()
 
 # Active selected agent state: Default is Main Agent (General AI Chat & Orchestration)
-CURRENT_AGENT = "main"
+CURRENT_AGENT = os.environ.get("OCTOPUS_INITIAL_AGENT", "main").strip().lower()
+
+# Dedicated single-thread worker for serialized WhatsApp / WebDriver operations
+whatsapp_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="WhatsAppWorker")
+
+# Per-client conversational session state with time-based expiry
+SESSION_STORAGE: Dict[str, Dict[str, Any]] = {}
+SESSION_EXPIRY_SEC = 300  # 5 minutes
+
+# Backward compatibility alias for tests directly accessing PENDING_SESSION_STATE
+PENDING_SESSION_STATE: Dict[str, Any] = {}
+
+def get_session_state(session_id: str) -> Dict[str, Any]:
+    now = time.time()
+    # Prune expired sessions
+    stale = [sid for sid, data in SESSION_STORAGE.items() if now - data.get("timestamp", 0) > SESSION_EXPIRY_SEC]
+    for sid in stale:
+        SESSION_STORAGE.pop(sid, None)
+        if sid == "default":
+            PENDING_SESSION_STATE.clear()
+
+    sess = SESSION_STORAGE.get(session_id)
+    if sess and now - sess.get("timestamp", 0) <= SESSION_EXPIRY_SEC:
+        return sess.get("state", {})
+    if session_id == "default" and PENDING_SESSION_STATE:
+        return PENDING_SESSION_STATE
+    return {}
+
+def set_session_state(session_id: str, state: Dict[str, Any]):
+    SESSION_STORAGE[session_id] = {
+        "state": state,
+        "timestamp": time.time()
+    }
+    if session_id == "default":
+        PENDING_SESSION_STATE.clear()
+        PENDING_SESSION_STATE.update(state)
+
+def clear_session_state(session_id: str):
+    SESSION_STORAGE.pop(session_id, None)
+    if session_id == "default":
+        PENDING_SESSION_STATE.clear()
 
 AVAILABLE_AGENTS = [
     {
@@ -116,8 +159,6 @@ AVAILABLE_AGENTS = [
     }
 ]
 
-# Conversational session state for multi-turn tasks (e.g. WhatsApp contact disambiguation)
-PENDING_SESSION_STATE: Dict[str, Any] = {}
 
 
 def classify_intent(user_msg: str, current_agent: str = "main") -> str:
@@ -186,33 +227,54 @@ def classify_intent(user_msg: str, current_agent: str = "main") -> str:
 
 def parse_whatsapp_request(user_msg: str) -> tuple:
     """
-    Extract contact name and message from commands.
+    Extract contact name and message from commands while preserving original casing.
     """
     msg_lower = user_msg.lower()
     contact = ""
     message = ""
 
-    if "to " in msg_lower and " saying " in msg_lower:
-        after_to = user_msg.split("to ", 1)[1]
-        contact, message = after_to.split(" saying ", 1)
-    elif "to " in msg_lower and ":" in user_msg:
-        after_to = user_msg.split("to ", 1)[1]
-        contact, message = after_to.split(":", 1)
-    elif "to " in msg_lower and " that " in msg_lower:
-        after_to = user_msg.split("to ", 1)[1]
-        contact, message = after_to.split(" that ", 1)
-    elif "to " in msg_lower:
-        after_to = user_msg.split("to ", 1)[1]
-        for kw in [" on whatsapp", " in whatsapp", " in web", " on web"]:
-            after_to = after_to.replace(kw, "").replace(kw.upper(), "")
-        if " and " in after_to:
-            after_to = after_to.split(" and ", 1)[0]
-        contact = after_to.strip()
-        message = "Hello!"
+    to_idx = msg_lower.find("to ")
+    if to_idx != -1:
+        after_to = user_msg[to_idx + 3:]
+        after_to_lower = msg_lower[to_idx + 3:]
+
+        saying_idx = after_to_lower.find(" saying ")
+        colon_idx = after_to.find(":")
+        that_idx = after_to_lower.find(" that ")
+
+        if saying_idx != -1:
+            contact = after_to[:saying_idx]
+            message = after_to[saying_idx + len(" saying "):]
+        elif colon_idx != -1:
+            contact = after_to[:colon_idx]
+            message = after_to[colon_idx + 1:]
+        elif that_idx != -1:
+            contact = after_to[:that_idx]
+            message = after_to[that_idx + len(" that "):]
+        else:
+            cleaned = after_to
+            cleaned_lower = after_to_lower
+            for kw in [" on whatsapp", " in whatsapp", " in web", " on web"]:
+                kw_idx = cleaned_lower.find(kw)
+                if kw_idx != -1:
+                    cleaned = cleaned[:kw_idx] + cleaned[kw_idx + len(kw):]
+                    cleaned_lower = cleaned.lower()
+            and_idx = cleaned_lower.find(" and ")
+            if and_idx != -1:
+                cleaned = cleaned[:and_idx]
+            contact = cleaned.strip()
+            message = "Hello!"
     else:
         cleaned = user_msg
+        cleaned_lower = msg_lower
         for kw in ["open whatsapp", "whatsapp web", "whatsapp", "in web", "send message", "message"]:
-            cleaned = cleaned.replace(kw, "").replace(kw.capitalize(), "")
+            while True:
+                kw_idx = cleaned_lower.find(kw)
+                if kw_idx != -1:
+                    cleaned = cleaned[:kw_idx] + cleaned[kw_idx + len(kw):]
+                    cleaned_lower = cleaned.lower()
+                else:
+                    break
         contact = cleaned.strip()
         message = "Hello!"
 
@@ -281,6 +343,7 @@ def get_or_create_visible_engine() -> BrowserEngine:
 class ChatRequest(BaseModel):
     message: str
     agent: Optional[str] = None
+    session_id: Optional[str] = "default"
 
 
 class SelectAgentRequest(BaseModel):
@@ -411,15 +474,19 @@ async def chat_endpoint(req: ChatRequest, background_tasks: BackgroundTasks):
     summary_text = ""
     triggered_action = None
 
+    session_id = req.session_id or "default"
+    session_state = get_session_state(session_id)
+
     # 1. MULTI-TURN PENDING STATE (e.g. WhatsApp contact disambiguation)
-    if PENDING_SESSION_STATE.get("type") == "whatsapp_disambiguation":
-        matches = PENDING_SESSION_STATE.get("matches", [])
-        pending_msg = PENDING_SESSION_STATE.get("pending_message", "Hello!")
+    if session_state.get("type") == "whatsapp_disambiguation":
+        matches = session_state.get("matches", [])
+        pending_msg = session_state.get("pending_message", "Hello!")
         selected_contact = None
 
         user_clean = user_lower.strip()
         for idx, match_name in enumerate(matches):
             num_str = str(idx + 1)
+            parts_longer_than_2 = [part.lower() for part in match_name.split() if len(part) > 2]
             if (user_clean == num_str or
                 user_clean == f"number {num_str}" or
                 user_clean == f"option {num_str}" or
@@ -427,12 +494,12 @@ async def chat_endpoint(req: ChatRequest, background_tasks: BackgroundTasks):
                 (idx == 1 and "second" in user_clean) or
                 (idx == 2 and "third" in user_clean) or
                 match_name.lower() in user_clean or
-                all(part.lower() in user_clean for part in match_name.split() if len(part) > 2)):
+                (parts_longer_than_2 and all(part in user_clean for part in parts_longer_than_2))):
                 selected_contact = match_name
                 break
 
         if selected_contact:
-            PENDING_SESSION_STATE.clear()
+            clear_session_state(session_id)
             CURRENT_AGENT = "web"
             res = await run_whatsapp_task(contact="", message=pending_msg, selected_contact=selected_contact)
             response_text = f"Selected {selected_contact}. Message sent on WhatsApp: '{pending_msg}'"
@@ -445,8 +512,8 @@ async def chat_endpoint(req: ChatRequest, background_tasks: BackgroundTasks):
                 "current_agent": "web",
                 "action": triggered_action
             }
-        elif any(w in user_clean for w in ["cancel", "stop", "nevermind", "abort", "no"]):
-            PENDING_SESSION_STATE.clear()
+        elif re.search(r'\b(cancel|stop|nevermind|abort|no)\b', user_clean):
+            clear_session_state(session_id)
             response_text = "Cancelled WhatsApp message."
             audio_url = await generate_speech_file(response_text)
             return {
@@ -458,7 +525,7 @@ async def chat_endpoint(req: ChatRequest, background_tasks: BackgroundTasks):
             }
         else:
             # Did not match selection, clear state and proceed to classify as new command
-            PENDING_SESSION_STATE.clear()
+            clear_session_state(session_id)
 
     # 2. UNIVERSAL INTENT CLASSIFICATION & AGENT AUTO-SWITCHING
     target_agent = classify_intent(user_msg, active_agent)
@@ -532,16 +599,26 @@ async def chat_endpoint(req: ChatRequest, background_tasks: BackgroundTasks):
             else:
                 contact, message = parse_whatsapp_request(user_msg)
                 if not contact:
-                    contact = "Harsha"
+                    response_text = "Who would you like to message on WhatsApp? Please provide the contact or group name."
+                    audio_url = await generate_speech_file(response_text)
+                    return {
+                        "success": True,
+                        "response": response_text,
+                        "audio_url": audio_url,
+                        "current_agent": "web",
+                        "action": {"agent": "web", "subsystem": "whatsapp", "action": "ask_contact"}
+                    }
 
                 try:
                     wa_res = await run_whatsapp_task(contact=contact, message=message)
                     if wa_res and wa_res.data and wa_res.data.get("disambiguation_required"):
                         matches = wa_res.data.get("matches", [])
-                        PENDING_SESSION_STATE["type"] = "whatsapp_disambiguation"
-                        PENDING_SESSION_STATE["matches"] = matches
-                        PENDING_SESSION_STATE["pending_message"] = message
-                        PENDING_SESSION_STATE["contact"] = contact
+                        set_session_state(session_id, {
+                            "type": "whatsapp_disambiguation",
+                            "matches": matches,
+                            "pending_message": message,
+                            "contact": contact
+                        })
                         options_str = "\n".join(f"{i+1}. {m}" for i, m in enumerate(matches))
                         response_text = f"I found {len(matches)} contacts matching '{contact}':\n{options_str}\nWhich one would you like to message?"
                         triggered_action = {"agent": "web", "subsystem": "whatsapp", "action": "disambiguate", "matches": matches}
@@ -648,18 +725,29 @@ async def chat_endpoint(req: ChatRequest, background_tasks: BackgroundTasks):
 
 
 # Background tasks that launch the real Chrome browser:
-async def run_whatsapp_task(contact: str, message: str, selected_contact: str = ""):
+def _sync_run_whatsapp(contact: str, message: str, selected_contact: str = ""):
     eng = get_or_create_visible_engine()
     if eng and eng.get_driver():
         from octopus_ai.automations.web.whatsapp import WhatsAppAutomation
         auto = WhatsAppAutomation(driver=eng.get_driver())
-        return await auto.run({
+        return asyncio.run(auto.run({
             "action": "send" if ((contact or selected_contact) and message) else "open",
             "contact": contact,
             "message": message,
             "selected_contact": selected_contact
-        })
+        }))
     return None
+
+
+async def run_whatsapp_task(contact: str, message: str, selected_contact: str = ""):
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(
+        whatsapp_executor,
+        _sync_run_whatsapp,
+        contact,
+        message,
+        selected_contact
+    )
 
 
 async def run_canva_task(query: str):
