@@ -63,4 +63,6 @@ docker-compose.override.yml
 chrome-data/
 octopus_ai/assets/audio_cache/
 octopus_ai/scratch/
-scratch/
+scratch/
+/*.mp4
+

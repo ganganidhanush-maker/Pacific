@@ -145,12 +145,16 @@ def classify_intent(user_msg: str, current_agent: str = "main") -> str:
         "task manager", "taskmgr", "command prompt", "powershell", "terminal",
         "file explorer", "explorer", "find file", "search file", "organize file",
         "move file", "touch file", "local file", "open new notepad", "write the python assignment",
-        "python assignment", "system info", "tasklist", "pdf", "documents", "downloads"
+        "python assignment", "system info", "tasklist", "pdf", "documents", "downloads",
+        "screenshot", "screen capture", "capture screen", "snip", "battery",
+        "mute", "unmute", "volume", "lock screen", "lock computer", "lock workstation",
+        "lock pc", "lock windows", "camera", "settings"
     ]
     if (any(k in msg_lower for k in desktop_triggers) or
         ("find" in msg_lower and ("file" in msg_lower or "doc" in msg_lower or "pdf" in msg_lower)) or
         ("search" in msg_lower and ("file" in msg_lower or "doc" in msg_lower or "pdf" in msg_lower))):
         return "desktop"
+
 
     # 3. Web actions: WhatsApp, Canva, Instagram, Google, browser
     web_triggers = [
@@ -341,6 +345,22 @@ async def get_live_status():
         "ui_mtime": ui_mtime,
         "current_agent": CURRENT_AGENT
     }
+
+
+@app.get("/api/avatar/manifest")
+async def get_avatar_manifest():
+    """
+    Returns available video clip libraries, durations, and tempo metadata
+    for seamless, non-repeating shuffle and speech-synchronized lip movement.
+    """
+    manifest_path = assets_dir / "videos" / "video_manifest.json"
+    if manifest_path.exists():
+        try:
+            with open(manifest_path, "r", encoding="utf-8") as f:
+                return {"success": True, "manifest": json.load(f)}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+    return {"success": False, "error": "Manifest not found"}
 
 
 @app.post("/api/tts")

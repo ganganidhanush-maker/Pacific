@@ -38,7 +38,23 @@ WINDOWS_APPS = {
     "settings": "ms-settings:",
     "control panel": "control.exe",
     "snipping tool": "snippingtool.exe",
-    "wordpad": "write.exe"
+    "snipping": "snippingtool.exe",
+    "screenshot": "ms-screenclip:",
+    "screenclip": "ms-screenclip:",
+    "wordpad": "write.exe",
+    "chrome": "chrome.exe",
+    "edge": "msedge.exe",
+    "browser": "msedge.exe",
+    "camera": "microsoft.windows.camera:",
+    "photos": "ms-photos:",
+    "clock": "ms-clock:",
+    "alarm": "ms-clock:",
+    "vscode": "code",
+    "code": "code",
+    "word": "winword.exe",
+    "excel": "excel.exe",
+    "powerpoint": "powerpnt.exe",
+    "media player": "wmplayer.exe"
 }
 
 
@@ -217,7 +233,7 @@ class DesktopAgent:
 
         try:
             if sys.platform == "win32":
-                if target.startswith("ms-settings:"):
+                if any(target.startswith(p) for p in ["ms-", "microsoft.", "bingmaps:"]):
                     subprocess.Popen(f"start {target}", shell=True)
                 else:
                     cmd = [target] + (args or [])
@@ -241,7 +257,7 @@ class DesktopAgent:
                 bin_name = linux_app_map.get(key, "nano")
                 subprocess.Popen([bin_name] + (args or []))
 
-            display_name = app_key_or_name.replace(".exe", "").capitalize()
+            display_name = app_key_or_name.replace(".exe", "").replace("ms-", "").capitalize()
             return {
                 "success": True,
                 "action": "launch_app",
@@ -256,6 +272,106 @@ class DesktopAgent:
                 "error": str(e),
                 "message": f"Could not open {app_key_or_name}: {e}"
             }
+
+    def take_screenshot(self, filename: Optional[str] = None) -> Dict[str, Any]:
+        """Capture the full screen and save as PNG on user's Desktop or Documents."""
+        try:
+            from PIL import ImageGrab
+            from datetime import datetime
+            target_dir = os.path.join(self.user_profile, "Desktop")
+            if not os.path.exists(target_dir):
+                target_dir = os.path.join(self.user_profile, "Documents")
+            if not os.path.exists(target_dir):
+                target_dir = str(Path(__file__).resolve().parent.parent.parent)
+
+            if not filename:
+                filename = f"screenshot_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+            filepath = os.path.join(target_dir, filename)
+
+            img = ImageGrab.grab()
+            img.save(filepath)
+            return {
+                "success": True,
+                "action": "screenshot",
+                "path": filepath,
+                "filename": filename,
+                "message": f"📸 Captured full screen and saved to Desktop as '{filename}'."
+            }
+        except Exception as e:
+            logger.error(f"Screenshot error: {e}")
+            return {
+                "success": False,
+                "action": "screenshot",
+                "error": str(e),
+                "message": f"Could not capture screenshot: {e}"
+            }
+
+    def get_system_info(self) -> Dict[str, Any]:
+        """Return system performance stats: CPU, RAM, disk space, and battery."""
+        try:
+            import psutil
+            import platform
+            cpu = psutil.cpu_percent(interval=0.1)
+            mem = psutil.virtual_memory()
+            disk = psutil.disk_usage(os.path.abspath(os.sep))
+            battery = psutil.sensors_battery()
+            battery_str = f"{battery.percent}% ({'Charging' if battery.power_plugged else 'Discharging'})" if battery else "AC Power / Desktop"
+            msg = (
+                f"🖥️ System Status ({platform.system()} {platform.release()}):\n"
+                f"• CPU Usage: {cpu}%\n"
+                f"• RAM: {mem.percent}% used ({mem.used // (1024**2):,}MB / {mem.total // (1024**2):,}MB)\n"
+                f"• Disk Space: {disk.percent}% used ({disk.free // (1024**3):,}GB free)\n"
+                f"• Battery: {battery_str}"
+            )
+            return {
+                "success": True,
+                "action": "system_info",
+                "cpu_percent": cpu,
+                "ram_percent": mem.percent,
+                "disk_percent": disk.percent,
+                "battery": battery_str,
+                "message": msg
+            }
+        except Exception as e:
+            logger.error(f"System info error: {e}")
+            return {
+                "success": False,
+                "action": "system_info",
+                "error": str(e),
+                "message": f"Could not query system info: {e}"
+            }
+
+    def toggle_volume_mute(self) -> Dict[str, Any]:
+        """Toggle master audio mute on Windows."""
+        try:
+            if sys.platform == "win32":
+                import ctypes
+                VK_VOLUME_MUTE = 0xAD
+                ctypes.windll.user32.keybd_event(VK_VOLUME_MUTE, 0, 0, 0)
+                ctypes.windll.user32.keybd_event(VK_VOLUME_MUTE, 0, 2, 0)
+                return {
+                    "success": True,
+                    "action": "volume_mute_toggle",
+                    "message": "🔊 Toggled master audio mute."
+                }
+            return {"success": False, "message": "Volume toggle only supported on Windows."}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def lock_workstation(self) -> Dict[str, Any]:
+        """Lock current Windows user workstation."""
+        try:
+            if sys.platform == "win32":
+                import ctypes
+                ctypes.windll.user32.LockWorkStation()
+                return {
+                    "success": True,
+                    "action": "lock_workstation",
+                    "message": "🔒 Locked Windows workstation."
+                }
+            return {"success": False, "message": "Lock workstation only supported on Windows."}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
 
     def generate_python_assignment(self, topic: str = "Python Core & Data Structures") -> str:
         """
@@ -505,7 +621,23 @@ if __name__ == "__main__":
             fps = params.get("file_paths", [])
             return self.organize_files(fps, folder)
 
-        # 10. Open specific file or application
+        # 10. Screenshot / Screen Capture
+        if any(w in cmd_lower for w in ["screenshot", "screen capture", "capture screen", "snip"]):
+            return self.take_screenshot()
+
+        # 11. System Performance / Battery / Disk Info
+        if any(w in cmd_lower for w in ["system info", "system status", "battery", "ram usage", "disk space", "storage"]):
+            return self.get_system_info()
+
+        # 12. Volume Mute / Unmute
+        if any(w in cmd_lower for w in ["mute", "unmute", "volume mute"]):
+            return self.toggle_volume_mute()
+
+        # 13. Lock Workstation
+        if any(w in cmd_lower for w in ["lock screen", "lock workstation", "lock computer", "lock pc", "lock windows"]):
+            return self.lock_workstation()
+
+        # 14. Open specific file or application
         if "open" in cmd_lower or "launch" in cmd_lower:
             fp = params.get("path") or params.get("file_path")
             if fp and os.path.exists(fp):

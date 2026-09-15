@@ -16,8 +16,10 @@ from server.app import (
     PENDING_SESSION_STATE,
     chat_endpoint,
     ChatRequest,
-    get_live_status
+    get_live_status,
+    get_avatar_manifest
 )
+
 
 
 class TestIntentAndDisambiguation(unittest.TestCase):
@@ -102,6 +104,24 @@ class TestIntentAndDisambiguation(unittest.TestCase):
         self.assertIn('ui_mtime', res)
         self.assertIn('current_agent', res)
 
+    def test_avatar_manifest_endpoint(self):
+        res = asyncio.run(get_avatar_manifest())
+        self.assertTrue(res['success'])
+        manifest = res['manifest']
+        self.assertIn('idle', manifest)
+        self.assertIn('thinking', manifest)
+        self.assertIn('speaking', manifest)
+        self.assertGreaterEqual(len(manifest['idle']), 6)
+        self.assertGreaterEqual(len(manifest['thinking']), 3)
+        self.assertGreaterEqual(len(manifest['speaking']), 7)
+
+    def test_classify_intent_expanded_desktop_tools(self):
+        self.assertEqual(classify_intent('take a screenshot'), 'desktop')
+        self.assertEqual(classify_intent('show system info and battery'), 'desktop')
+        self.assertEqual(classify_intent('mute master volume'), 'desktop')
+        self.assertEqual(classify_intent('lock workstation'), 'desktop')
+
 
 if __name__ == '__main__':
     unittest.main()
+

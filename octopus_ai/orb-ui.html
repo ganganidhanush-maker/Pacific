@@ -509,12 +509,9 @@
   <div class="stage">
     <!-- FRAMELESS FREE-STANDING VIDEO AVATAR (NO GHOSTING, PURE WHITE BLEND) -->
     <div class="model-wrapper" id="modelWrapper">
-      <!-- IDLE: Natural breathing, attentive posture, calm closed mouth -->
-      <video class="avatar-video" id="videoIdle" src="/assets/videos/idle.mp4" autoplay loop muted playsinline preload="auto"></video>
-      <!-- THINKING: Contemplating, hand on chin, thoughtful gaze (Zero Blank Screen) -->
-      <video class="avatar-video video-hidden" id="videoThinking" src="/assets/videos/thinking.mp4" loop muted playsinline preload="auto"></video>
-      <!-- SPEAKING: 10-Second expressive speech with dynamic mouth and head motion -->
-      <video class="avatar-video video-hidden" id="videoSpeaking" src="/assets/videos/speaking.mp4" loop muted playsinline preload="auto"></video>
+      <!-- DUAL-BUFFER AVATAR PIPELINE (Continuous Seamless Crossfade, Zero Loop, Zero Blank Screen) -->
+      <video class="avatar-video" id="avatarVideoA" src="/assets/videos/idle_1.mp4" autoplay muted playsinline preload="auto"></video>
+      <video class="avatar-video video-hidden" id="avatarVideoB" src="/assets/videos/idle_2.mp4" muted playsinline preload="auto"></video>
     </div>
 
     <!-- ELONGATED SEARCH BAR (DIRECTLY BELOW MODEL AS IN SKETCH) -->
@@ -590,9 +587,8 @@
    - 9-Dots Multi-Agent Selection & Real Chrome Automations
 ========================================================================= */
 
-const videoIdle = document.getElementById('videoIdle');
-const videoThinking = document.getElementById('videoThinking');
-const videoSpeaking = document.getElementById('videoSpeaking');
+const avatarVideoA = document.getElementById('avatarVideoA');
+const avatarVideoB = document.getElementById('avatarVideoB');
 
 const appsBtn = document.getElementById('appsBtn');
 const agentsMenu = document.getElementById('agentsMenu');
@@ -609,6 +605,159 @@ let currentAgent = 'main';
 let currentState = 'idle';
 let currentAudio = null;
 let isSubmitting = false;
+
+// Fallback clip library (enhanced dynamically via /api/avatar/manifest)
+const DEFAULT_AVATAR_MANIFEST = {
+  idle: [
+    { id: 'idle_1', file: '/assets/videos/idle_1.mp4', duration: 5.0, style: 'calm_attentive' },
+    { id: 'idle_2', file: '/assets/videos/idle_2.mp4', duration: 5.0, style: 'natural_blink' },
+    { id: 'idle_3', file: '/assets/videos/idle_3.mp4', duration: 5.0, style: 'subtle_tilt' },
+    { id: 'idle_4', file: '/assets/videos/idle_4.mp4', duration: 5.0, style: 'gentle_smile' },
+    { id: 'idle_5', file: '/assets/videos/idle_5.mp4', duration: 5.0, style: 'focused_listen' },
+    { id: 'idle_6', file: '/assets/videos/idle_6.mp4', duration: 5.0, style: 'relaxed_posture' }
+  ],
+  thinking: [
+    { id: 'thinking_1', file: '/assets/videos/thinking_1.mp4', duration: 5.0, style: 'contemplative_upward' },
+    { id: 'thinking_2', file: '/assets/videos/thinking_2.mp4', duration: 5.0, style: 'calculating_deep' },
+    { id: 'thinking_3', file: '/assets/videos/thinking_3.mp4', duration: 2.1, style: 'attentive_pause' }
+  ],
+  speaking: [
+    { id: 'speaking_1', file: '/assets/videos/speaking_1.mp4', duration: 3.4, tempo: 'fast', style: 'energetic_affirmation' },
+    { id: 'speaking_2', file: '/assets/videos/speaking_2.mp4', duration: 3.7, tempo: 'medium', style: 'articulate_statement' },
+    { id: 'speaking_3', file: '/assets/videos/speaking_3.mp4', duration: 4.1, tempo: 'medium', style: 'expressive_explanation' },
+    { id: 'speaking_4', file: '/assets/videos/speaking_4.mp4', duration: 5.3, tempo: 'expressive', style: 'concluding_remark' },
+    { id: 'speaking_5', file: '/assets/videos/speaking_5.mp4', duration: 4.15, tempo: 'fast', style: 'rapid_response' },
+    { id: 'speaking_6', file: '/assets/videos/speaking_6.mp4', duration: 5.0, tempo: 'medium', style: 'conversational_flow' },
+    { id: 'speaking_7', file: '/assets/videos/speaking_7.mp4', duration: 5.0, tempo: 'expressive', style: 'animated_explanation' }
+  ]
+};
+
+class DynamicAvatarEngine {
+  constructor(elA, elB) {
+    this.videoA = elA;
+    this.videoB = elB;
+    this.activeVideo = elA;
+    this.standbyVideo = elB;
+    this.state = 'idle';
+    this.manifest = DEFAULT_AVATAR_MANIFEST;
+    this.history = { idle: [], thinking: [], speaking: [] };
+    this.currentClip = null;
+    this.standbyClip = null;
+    this.isTransitioning = false;
+    this.playbackRate = 1.0;
+
+    // Load server manifest
+    fetch('/api/avatar/manifest')
+      .then(res => res.json())
+      .then(data => {
+        if (data && data.success && data.manifest) {
+          this.manifest = data.manifest;
+        }
+      })
+      .catch(() => {});
+
+    // Attach playback listeners
+    [this.videoA, this.videoB].forEach(v => {
+      v.addEventListener('timeupdate', () => this.onTimeUpdate(v));
+      v.addEventListener('ended', () => this.onEnded(v));
+    });
+
+    // Start with a randomized initial idle clip
+    const initial = this.pickNextClip('idle');
+    this.currentClip = initial;
+    this.activeVideo.src = initial.file;
+    this.activeVideo.play().catch(() => {});
+    this.preloadStandby('idle');
+  }
+
+  pickNextClip(targetState, criteria = {}) {
+    const list = this.manifest[targetState] || this.manifest.idle;
+    const historyList = this.history[targetState] || [];
+
+    let candidates = list;
+    if (criteria.tempo) {
+      const tempoMatches = list.filter(c => c.tempo === criteria.tempo);
+      if (tempoMatches.length > 0) candidates = tempoMatches;
+    }
+
+    // Never repeat the last 2 played clips in this state
+    let pool = candidates.filter(c => !historyList.slice(-2).includes(c.id));
+    if (pool.length === 0) pool = candidates;
+
+    const chosen = pool[Math.floor(Math.random() * pool.length)];
+    if (!this.history[targetState]) this.history[targetState] = [];
+    this.history[targetState].push(chosen.id);
+    if (this.history[targetState].length > 10) this.history[targetState].shift();
+    return chosen;
+  }
+
+  preloadStandby(targetState, criteria = {}) {
+    const clip = this.pickNextClip(targetState, criteria);
+    this.standbyClip = clip;
+    if (this.standbyVideo.src !== clip.file) {
+      this.standbyVideo.src = clip.file;
+      this.standbyVideo.playbackRate = this.playbackRate;
+      this.standbyVideo.load();
+    }
+  }
+
+  transitionToStandby(forceImmediate = false) {
+    if (this.isTransitioning && !forceImmediate) return;
+    this.isTransitioning = true;
+
+    const currentActive = this.activeVideo;
+    const nextActive = this.standbyVideo;
+
+    nextActive.currentTime = 0;
+    nextActive.playbackRate = this.playbackRate;
+    nextActive.play().catch(() => {});
+
+    nextActive.classList.remove('video-hidden');
+    currentActive.classList.add('video-hidden');
+
+    setTimeout(() => {
+      currentActive.pause();
+      this.activeVideo = nextActive;
+      this.standbyVideo = currentActive;
+      this.currentClip = this.standbyClip;
+      this.isTransitioning = false;
+
+      // Preload the next shuffled clip in standby
+      this.preloadStandby(this.state);
+    }, 240);
+  }
+
+  onTimeUpdate(video) {
+    if (video !== this.activeVideo) return;
+    // Crossfade 0.35s before end so transitions are butter-smooth without freezing
+    if (video.duration && video.currentTime >= (video.duration - 0.35)) {
+      if (!this.isTransitioning) {
+        this.transitionToStandby();
+      }
+    }
+  }
+
+  onEnded(video) {
+    if (video === this.activeVideo && !this.isTransitioning) {
+      this.transitionToStandby();
+    }
+  }
+
+  setState(newState, criteria = {}) {
+    if (this.state === newState && !criteria.force) return;
+    this.state = newState;
+    this.preloadStandby(newState, criteria);
+    this.transitionToStandby(true);
+  }
+
+  setPlaybackRate(rate) {
+    this.playbackRate = Math.min(Math.max(rate, 0.75), 1.35);
+    if (this.activeVideo) this.activeVideo.playbackRate = this.playbackRate;
+    if (this.standbyVideo) this.standbyVideo.playbackRate = this.playbackRate;
+  }
+}
+
+const avatarEngine = new DynamicAvatarEngine(avatarVideoA, avatarVideoB);
 
 const agentConfigs = {
   'main': {
@@ -644,38 +793,97 @@ function switchVideoState(newState) {
   currentState = newState;
 
   if (newState === 'thinking') {
-    videoThinking.currentTime = 0;
-    videoThinking.play().catch(() => {});
-    videoThinking.classList.remove('video-hidden');
-    videoIdle.classList.add('video-hidden');
-    videoSpeaking.classList.add('video-hidden');
-    videoIdle.pause();
-    videoSpeaking.pause();
+    avatarEngine.setState('thinking');
     statusDot.className = 'status-dot thinking';
     statusText.textContent = 'Thinking…';
   } else if (newState === 'speaking') {
-    videoSpeaking.currentTime = 0;
-    videoSpeaking.play().catch(() => {});
-    videoSpeaking.classList.remove('video-hidden');
-    videoIdle.classList.add('video-hidden');
-    videoThinking.classList.add('video-hidden');
-    videoIdle.pause();
-    videoThinking.pause();
+    avatarEngine.setState('speaking');
     statusDot.className = 'status-dot speaking';
     statusText.textContent = 'Speaking…';
-  } else { // idle
-    videoIdle.play().catch(() => {});
-    videoIdle.classList.remove('video-hidden');
-    videoThinking.classList.add('video-hidden');
-    videoSpeaking.classList.add('video-hidden');
-    videoThinking.pause();
-    videoSpeaking.pause();
+  } else {
+    avatarEngine.setState('idle');
     statusDot.className = 'status-dot';
     statusText.textContent = 'Ready';
   }
 }
 
-// Natural Male Neural Voice Playback & Exact Lip Sync Alignment
+// Audio-Reactive Lip Sync Engine with Pause Sensing & Cadence Scaling
+let audioCtx = null;
+let audioAnalyser = null;
+let audioSourceNode = null;
+let lipSyncAnimFrame = null;
+
+function setupAudioLipSync(audioElement, spokenText) {
+  const words = spokenText.trim().split(/\s+/).filter(w => w.length > 0);
+  const wordCount = words.length;
+
+  audioElement.onloadedmetadata = () => {
+    const duration = audioElement.duration || 3.0;
+    const wordsPerSec = wordCount / duration;
+    // Human conversational speech ~2.5 words/sec. Dynamically scale lip motion speed!
+    const cadenceMultiplier = Math.min(Math.max(wordsPerSec / 2.5, 0.85), 1.25);
+    avatarEngine.setPlaybackRate(cadenceMultiplier);
+  };
+
+  try {
+    if (!audioCtx) {
+      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+      if (AudioContextClass) audioCtx = new AudioContextClass();
+    }
+    if (audioCtx && audioCtx.state === 'suspended') {
+      audioCtx.resume();
+    }
+    if (audioCtx && !audioSourceNode) {
+      audioSourceNode = audioCtx.createMediaElementSource(audioElement);
+      audioAnalyser = audioCtx.createAnalyser();
+      audioAnalyser.fftSize = 256;
+      audioSourceNode.connect(audioAnalyser);
+      audioAnalyser.connect(audioCtx.destination);
+    }
+  } catch (err) {
+    console.warn("Web Audio Lip Sync note:", err);
+  }
+
+  const bufferLength = audioAnalyser ? audioAnalyser.frequencyBinCount : 0;
+  const dataArray = bufferLength ? new Uint8Array(bufferLength) : null;
+  let quietCount = 0;
+
+  function monitorLipSync() {
+    if (!currentAudio || currentAudio.paused || currentAudio.ended) {
+      if (lipSyncAnimFrame) cancelAnimationFrame(lipSyncAnimFrame);
+      return;
+    }
+
+    if (audioAnalyser && dataArray) {
+      audioAnalyser.getByteTimeDomainData(dataArray);
+      let sum = 0;
+      for (let i = 0; i < bufferLength; i++) {
+        const v = (dataArray[i] - 128) / 128;
+        sum += v * v;
+      }
+      const rms = Math.sqrt(sum / bufferLength);
+
+      // Acoustic pause detection (inter-phrase or punctuation silence)
+      if (rms < 0.018) {
+        quietCount++;
+        if (quietCount > 5) {
+          // Pause mouth movement naturally during quiet gaps
+          avatarEngine.activeVideo.playbackRate = 0.12;
+        }
+      } else {
+        quietCount = 0;
+        avatarEngine.activeVideo.playbackRate = avatarEngine.playbackRate;
+      }
+    }
+    lipSyncAnimFrame = requestAnimationFrame(monitorLipSync);
+  }
+
+  if (audioAnalyser) {
+    monitorLipSync();
+  }
+}
+
+// Natural Male Neural Voice Playback & Real-Time Lip Sync Alignment
 function playAgentSpeech(audioUrl, text) {
   if (currentAudio) {
     currentAudio.onended = null;
@@ -683,11 +891,17 @@ function playAgentSpeech(audioUrl, text) {
     currentAudio.currentTime = 0;
     currentAudio = null;
   }
+  if (lipSyncAnimFrame) {
+    cancelAnimationFrame(lipSyncAnimFrame);
+  }
 
   statusText.textContent = text;
 
   if (!audioUrl) {
-    switchVideoState('speaking');
+    const words = text.trim().split(/\s+/).filter(w => w.length > 0);
+    const criteria = words.length <= 5 ? { tempo: 'fast' } : {};
+    avatarEngine.setState('speaking', criteria);
+    statusDot.className = 'status-dot speaking';
     setTimeout(() => switchVideoState('idle'), Math.min(Math.max(text.length * 60, 2000), 5000));
     return;
   }
@@ -695,20 +909,30 @@ function playAgentSpeech(audioUrl, text) {
   currentAudio = new Audio(audioUrl);
 
   currentAudio.onplay = () => {
-    switchVideoState('speaking');
+    const words = text.trim().split(/\s+/).filter(w => w.length > 0);
+    const criteria = words.length <= 5 ? { tempo: 'fast' } : {};
+    avatarEngine.setState('speaking', criteria);
+    statusDot.className = 'status-dot speaking';
+    setupAudioLipSync(currentAudio, text);
   };
 
   currentAudio.onended = () => {
+    if (lipSyncAnimFrame) cancelAnimationFrame(lipSyncAnimFrame);
+    avatarEngine.setPlaybackRate(1.0);
     switchVideoState('idle');
   };
 
   currentAudio.onerror = (e) => {
     console.warn('Audio playback note:', e);
+    if (lipSyncAnimFrame) cancelAnimationFrame(lipSyncAnimFrame);
+    avatarEngine.setPlaybackRate(1.0);
     switchVideoState('idle');
   };
 
   currentAudio.play().catch(err => {
     console.warn('Audio playback notice:', err);
+    if (lipSyncAnimFrame) cancelAnimationFrame(lipSyncAnimFrame);
+    avatarEngine.setPlaybackRate(1.0);
     switchVideoState('idle');
   });
 }

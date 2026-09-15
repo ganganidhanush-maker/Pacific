@@ -75,6 +75,52 @@ class TestDesktopAgent(unittest.TestCase):
         self.assertIsInstance(files, list)
         self.assertGreater(len(files), 0)
 
+    def test_expanded_windows_apps_registry(self):
+        self.assertIn("chrome", WINDOWS_APPS)
+        self.assertIn("edge", WINDOWS_APPS)
+        self.assertIn("camera", WINDOWS_APPS)
+        self.assertIn("vscode", WINDOWS_APPS)
+        self.assertIn("word", WINDOWS_APPS)
+        self.assertIn("excel", WINDOWS_APPS)
+
+    def test_get_system_info(self):
+        res = self.agent.get_system_info()
+        self.assertTrue(res["success"])
+        self.assertIn("cpu_percent", res)
+        self.assertIn("ram_percent", res)
+        self.assertIn("disk_percent", res)
+        self.assertIn("System Status", res["message"])
+
+    @patch("PIL.ImageGrab.grab")
+    def test_take_screenshot(self, mock_grab):
+        mock_img = MagicMock()
+        mock_grab.return_value = mock_img
+        res = self.agent.take_screenshot("test_screen.png")
+        self.assertTrue(res["success"])
+        self.assertEqual(res["action"], "screenshot")
+        self.assertIn("test_screen.png", res["filename"])
+        mock_img.save.assert_called()
+
+    @patch("PIL.ImageGrab.grab")
+    def test_execute_task_screenshot(self, mock_grab):
+        mock_img = MagicMock()
+        mock_grab.return_value = mock_img
+        res = asyncio.run(self.agent.execute_task("take a screenshot"))
+        self.assertTrue(res["success"])
+        self.assertEqual(res["action"], "screenshot")
+
+    def test_execute_task_system_info(self):
+        res = asyncio.run(self.agent.execute_task("show system info and battery"))
+        self.assertTrue(res["success"])
+        self.assertEqual(res["action"], "system_info")
+
+    @patch("ctypes.windll.user32.LockWorkStation", create=True)
+    def test_execute_task_lock_workstation(self, mock_lock):
+        res = asyncio.run(self.agent.execute_task("lock computer"))
+        self.assertTrue(res["success"])
+        self.assertEqual(res["action"], "lock_workstation")
+
 
 if __name__ == "__main__":
     unittest.main()
+
