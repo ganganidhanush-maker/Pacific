@@ -27,6 +27,7 @@ class TestWhatsAppAutoResponder(unittest.TestCase):
     def setUp(self):
         self.llm = GroqLLM()
         self.memory = Memory()
+        self.memory.clear_short_term()
         self.responder = WhatsAppAutoResponder(driver=None, groq_llm=self.llm, memory=self.memory)
 
     def test_generate_ai_reply(self):

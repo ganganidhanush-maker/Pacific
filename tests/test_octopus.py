@@ -54,6 +54,7 @@ class TestMemory(unittest.TestCase):
 
     def setUp(self):
         self.memory = Memory()
+        self.memory.clear_short_term()
 
     def test_conversation_history(self):
         self.memory.add_conversation("user", "Hello Octopus")

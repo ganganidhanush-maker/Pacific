@@ -23,5 +23,9 @@ pywebview>=4.4.1
 pillow>=10.0.0
 numpy>=1.24.0
 
-# Optional: Cloud LLM Integration
+# Cloud LLMs: Groq and Kimi K3 ("Kiwi") / Moonshot
 groq>=0.4.2
+openai>=1.0.0
+
+# System Metrics & Process Management
+psutil>=5.9.0
