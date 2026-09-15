@@ -165,7 +165,7 @@ Respond in JSON format for tool calls, or natural language for responses."""
                 model=self.model,
                 messages=messages,
                 temperature=0.7,
-                max_tokens=1024,
+                max_tokens=800,
                 top_p=1,
                 stream=False
             )

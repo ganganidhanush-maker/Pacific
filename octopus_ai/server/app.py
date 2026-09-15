@@ -224,7 +224,9 @@ def classify_intent(user_msg: str, current_agent: str = "main") -> str:
         "whatsapp", "canva", "instagram", "send message to", "message to",
         "search google", "google search", "browse to", "open url", "youtube",
         "open browser", "open chrome", "launch chrome", "broadcast", "ptm",
-        "open whatsapp", "open canva", "open instagram"
+        "open whatsapp", "open canva", "open instagram",
+        "activate whatsapp", "start whatsapp", "auto responder", "auto chat",
+        "deactivate whatsapp", "stop whatsapp"
     ]
     if any(k in msg_lower for k in web_triggers):
         return "web"
@@ -435,6 +437,86 @@ def get_or_create_visible_engine() -> BrowserEngine:
     return engine_instance
 
 
+# Background WhatsApp Auto-Responder State
+whatsapp_auto_responder_instance: Optional[Any] = None
+whatsapp_auto_responder_thread: Optional[Any] = None
+
+
+def start_whatsapp_auto_responder() -> tuple[bool, str]:
+    """
+    Launch WhatsApp Web in visible Chrome and start the WhatsAppAutoResponder loop
+    in a dedicated background daemon thread.
+    """
+    global whatsapp_auto_responder_instance, whatsapp_auto_responder_thread
+    if whatsapp_auto_responder_thread and whatsapp_auto_responder_thread.is_alive():
+        if whatsapp_auto_responder_instance and whatsapp_auto_responder_instance.is_running:
+            return True, "WhatsApp Auto-Responder is already running."
+
+    try:
+        eng = get_or_create_visible_engine()
+        if not eng or not eng.get_driver():
+            return False, "Could not launch visible Chrome browser."
+
+        driver = eng.get_driver()
+        curr_url = (driver.current_url or "").lower()
+        if "web.whatsapp.com" not in curr_url:
+            driver.get("https://web.whatsapp.com")
+            time.sleep(2)
+
+        from octopus_ai.agent.whatsapp_responder import WhatsAppAutoResponder
+        if whatsapp_auto_responder_instance is None:
+            whatsapp_auto_responder_instance = WhatsAppAutoResponder(driver=driver, user_name="Dhanush")
+        else:
+            whatsapp_auto_responder_instance.set_driver(driver)
+
+        whatsapp_auto_responder_instance.is_running = True
+
+        def _responder_worker():
+            import logging
+            log = logging.getLogger("WhatsAppAutoResponderThread")
+            log.info("WhatsApp Auto-Responder background thread started.")
+            try:
+                if not whatsapp_auto_responder_instance.is_authenticated:
+                    whatsapp_auto_responder_instance.wait_for_login(timeout=60)
+                
+                while whatsapp_auto_responder_instance.is_running:
+                    try:
+                        whatsapp_auto_responder_instance.poll_once()
+                        time.sleep(1.5)
+                    except Exception as cycle_e:
+                        err_str = str(cycle_e).lower()
+                        if any(x in err_str for x in ["refused", "disconnected", "closed", "invalid session", "target machine", "connection reset"]):
+                            log.info("WhatsApp browser closed or disconnected. Terminating auto-responder.")
+                            whatsapp_auto_responder_instance.is_running = False
+                            break
+                        time.sleep(2.0)
+            except Exception as outer_e:
+                log.warning(f"Auto-responder worker encountered an error: {outer_e}")
+            finally:
+                log.info("WhatsApp Auto-Responder thread stopped.")
+
+        import threading
+        whatsapp_auto_responder_thread = threading.Thread(
+            target=_responder_worker,
+            daemon=True,
+            name="WhatsAppAutoResponderThread"
+        )
+        whatsapp_auto_responder_thread.start()
+        return True, "WhatsApp Auto-Responder started successfully."
+    except Exception as e:
+        print(f"⚠️ start_whatsapp_auto_responder notice: {e}")
+        return False, str(e)
+
+
+def stop_whatsapp_auto_responder() -> tuple[bool, str]:
+    """Stop the background WhatsApp Auto-Responder."""
+    global whatsapp_auto_responder_instance
+    if whatsapp_auto_responder_instance and whatsapp_auto_responder_instance.is_running:
+        whatsapp_auto_responder_instance.stop()
+        return True, "WhatsApp Auto-Responder stopped."
+    return False, "WhatsApp Auto-Responder was not running."
+
+
 class ChatRequest(BaseModel):
     message: str
     agent: Optional[str] = None
@@ -528,6 +610,38 @@ async def tts_endpoint(req: TTSRequest):
     return {
         "success": audio_url is not None,
         "audio_url": audio_url
+    }
+
+
+@app.post("/api/whatsapp/auto-responder/start")
+async def start_auto_responder_endpoint():
+    """Start WhatsApp Auto-Responder background daemon."""
+    success, msg = start_whatsapp_auto_responder()
+    return {"success": success, "message": msg}
+
+
+@app.post("/api/whatsapp/auto-responder/stop")
+async def stop_auto_responder_endpoint():
+    """Stop WhatsApp Auto-Responder background daemon."""
+    success, msg = stop_whatsapp_auto_responder()
+    return {"success": success, "message": msg}
+
+
+@app.get("/api/whatsapp/auto-responder/status")
+async def auto_responder_status_endpoint():
+    """Get status of WhatsApp Auto-Responder."""
+    global whatsapp_auto_responder_instance, whatsapp_auto_responder_thread
+    is_running = (
+        whatsapp_auto_responder_instance is not None
+        and getattr(whatsapp_auto_responder_instance, "is_running", False)
+        and whatsapp_auto_responder_thread is not None
+        and whatsapp_auto_responder_thread.is_alive()
+    )
+    return {
+        "success": True,
+        "is_running": is_running,
+        "active_contact": getattr(whatsapp_auto_responder_instance, "active_chat_contact", None) if whatsapp_auto_responder_instance else None,
+        "inactivity_limit_seconds": 25.0
     }
 
 
@@ -677,8 +791,29 @@ async def chat_endpoint(req: ChatRequest, background_tasks: BackgroundTasks):
 
     elif active_agent == "web":
         # Web Agent: WhatsApp with disambiguation, Canva, Instagram, Google Search
-        if "whatsapp" in user_lower or "message" in user_lower or "broadcast" in user_lower or "ptm" in user_lower:
-            if "broadcast" in user_lower or "ptm" in user_lower or "groups" in user_lower:
+        if "whatsapp" in user_lower or "message" in user_lower or "broadcast" in user_lower or "ptm" in user_lower or "auto responder" in user_lower or "auto chat" in user_lower:
+            is_activate_auto = any(kw in user_lower for kw in [
+                "activate whatsapp", "start whatsapp auto", "activate auto responder",
+                "start auto responder", "auto chat on whatsapp", "auto-chat on whatsapp",
+                "auto chat whatsapp", "whatsapp auto responder", "turn on whatsapp auto",
+                "whatsapp activate", "whatsapp auto chat", "whatsapp on cheyi", "whatsapp activate cheyi",
+                "/activate whatsapp", "/autoresponder", "/whatsapp auto"
+            ])
+            is_stop_auto = any(kw in user_lower for kw in [
+                "stop whatsapp auto", "deactivate whatsapp", "stop auto responder",
+                "turn off whatsapp auto", "disable whatsapp auto", "stop auto chat",
+                "stop whatsapp"
+            ])
+
+            if is_activate_auto:
+                start_whatsapp_auto_responder()
+                response_text = "WhatsApp Web activated in auto-responder mode. I will automatically chat with incoming messages using conversation context and stay on each chat until 25 seconds of silence."
+                triggered_action = {"agent": "web", "subsystem": "whatsapp", "action": "auto_responder_activated"}
+            elif is_stop_auto:
+                stop_whatsapp_auto_responder()
+                response_text = "WhatsApp Auto-Responder has been stopped."
+                triggered_action = {"agent": "web", "subsystem": "whatsapp", "action": "auto_responder_stopped"}
+            elif "broadcast" in user_lower or "ptm" in user_lower or "groups" in user_lower:
                 try:
                     plan = await master_orchestrator_instance.optimize_and_decompose(user_msg)
                     exec_res = await master_orchestrator_instance.execute_plan(plan, user_msg)

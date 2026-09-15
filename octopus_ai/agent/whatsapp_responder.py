@@ -39,13 +39,17 @@ class WhatsAppAutoResponder:
         groq_llm: Optional[GroqLLM] = None, 
         memory: Optional[Memory] = None,
         allow_group_replies: bool = False,
-        user_name: str = "Dhanush"
+        user_name: str = "Dhanush",
+        inactivity_limit_seconds: float = 25.0
     ):
         self.driver = driver
         self.llm = groq_llm or GroqLLM()
         self.memory = memory or Memory()
         self.allow_group_replies = allow_group_replies
         self.user_name = user_name
+        self.inactivity_limit_seconds = inactivity_limit_seconds
+        self.last_activity_timestamp: float = 0.0
+        self.active_chat_contact: Optional[str] = None
         self.replied_fingerprints: Set[str] = set()
         self.sent_replies_history: Set[str] = set()
         self.is_running = False
@@ -208,6 +212,67 @@ class WhatsAppAutoResponder:
         except Exception:
             pass
         return False
+
+    def is_conversation_open(self) -> bool:
+        """Check if a conversation pane (#main) is currently open in WhatsApp Web."""
+        if not self.driver:
+            return False
+        try:
+            return bool(self.driver.execute_script("""
+                const main = document.querySelector("#main");
+                return !!main && main.offsetParent !== null;
+            """))
+        except Exception:
+            return False
+
+    def is_contact_typing(self) -> bool:
+        """
+        Check if the contact in the active WhatsApp conversation is currently typing.
+        Inspects WhatsApp Web header subtitle and typing indicators across languages.
+        """
+        if not self.driver:
+            return False
+        
+        try:
+            res = self.driver.execute_script("""
+                const header = document.querySelector("#main header") || document.querySelector("header");
+                if (!header) return false;
+                
+                // 1. Check header text for 'typing' in multiple languages
+                const txt = (header.innerText || header.textContent || "").toLowerCase();
+                const typingWords = [
+                    "typing", "రైటింగ్", "టైపింగ్", "టైప్", "टाइपिंग", "टाइप", 
+                    "escribiendo", "digitando", "écrit", "schreibt", "sta scrivendo",
+                    "aan het typen", "pisze", "yazıyor"
+                ];
+                for (const word of typingWords) {
+                    if (txt.includes(word)) return true;
+                }
+                
+                // 2. Check for animated typing indicators, SVGs, or dedicated spans
+                const typingSelectors = [
+                    "[data-testid='typing']",
+                    "[data-icon*='typing']",
+                    "span[title*='typing' i]",
+                    "span[aria-label*='typing' i]",
+                    "div._ak8q",
+                    "span._ak8i"
+                ];
+                for (const sel of typingSelectors) {
+                    const el = header.querySelector(sel);
+                    if (el) {
+                        const elTxt = (el.textContent || el.getAttribute("title") || "").toLowerCase();
+                        if (elTxt.includes("typing") || elTxt.includes("టైపింగ్") || elTxt.includes("రైటింగ్")) {
+                            return true;
+                        }
+                    }
+                }
+                
+                return false;
+            """)
+            return bool(res)
+        except Exception:
+            return False
 
     def check_unread_chats(self) -> bool:
         """
@@ -779,9 +844,9 @@ class WhatsAppAutoResponder:
 
     def poll_once(self, whatsapp_handle: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """
-        Execute a single polling iteration with cross-tab support:
-        1. If whatsapp_handle is specified and current active tab is different (e.g. user is on Instagram/Canva),
-           switch to WhatsApp, check for new messages, respond, and restore the user's active tab!
+        Execute a single polling iteration with cross-tab support and 25-second chat retention:
+        - Stays focused on the active chat as long as the contact is typing or sending messages.
+        - Only checks or switches to another chat if the contact has stopped typing and been inactive for > 25 seconds.
         """
         if not self.driver:
             return None
@@ -802,26 +867,61 @@ class WhatsAppAutoResponder:
                 except Exception:
                     pass
             
-            # 1. Open any unread chat in sidebar
-            self.check_unread_chats()
+            now = time.time()
+            conv_open = self.is_conversation_open()
+            active_title = self.get_active_chat_title() if conv_open else None
             
+            # Sync active chat contact and initialize activity timestamp if newly opened
+            if conv_open and active_title and active_title != "Unknown":
+                if self.active_chat_contact != active_title:
+                    self.active_chat_contact = active_title
+                    self.last_activity_timestamp = now
+                    logger.info(f"Switched to active chat: '{active_title}'. 25s inactivity timer initiated.")
+
+            # Check if contact in active conversation is currently typing
+            contact_typing = False
+            if conv_open and self.active_chat_contact:
+                contact_typing = self.is_contact_typing()
+                if contact_typing:
+                    self.last_activity_timestamp = now
+                    logger.debug(f"{self.active_chat_contact} is typing... Activity timer refreshed.")
+
+            # 1. 25-SECOND INACTIVITY RULE:
+            # Only leave the chat if the contact is NOT typing and has had no new messages for > 25 seconds.
+            can_switch_chat = True
+            if conv_open and self.active_chat_contact:
+                elapsed = now - self.last_activity_timestamp
+                if contact_typing or elapsed < self.inactivity_limit_seconds:
+                    can_switch_chat = False
+
+            if can_switch_chat:
+                # We are allowed to scan and open any unread chat in the sidebar
+                opened = self.check_unread_chats()
+                if opened:
+                    self.active_chat_contact = self.get_active_chat_title()
+                    self.last_activity_timestamp = time.time()
+                    conv_open = True
+
             # 2. Check active chat for new incoming message
             msg_info = self.get_latest_message_info()
             
             # Heartbeat print every 15 seconds so user knows bot is actively monitoring
-            now = time.time()
             if not hasattr(self, "_last_heartbeat"):
                 self._last_heartbeat = 0
             if now - self._last_heartbeat > 15:
                 self._last_heartbeat = now
                 curr_chat = self.get_active_chat_title()
                 if curr_chat and curr_chat != "Unknown":
-                    print(f"⏳ [Active] Listening for messages in: \"{curr_chat}\"...")
+                    status_extra = " (typing...)" if contact_typing else ""
+                    print(f"⏳ [Active] Listening in: \"{curr_chat}\"{status_extra}...")
                 else:
                     print(f"⏳ [Active] Listening for incoming messages...")
             
             if not msg_info:
                 return None
+            
+            # We received an incoming message! Reset activity timestamp immediately
+            self.last_activity_timestamp = time.time()
             
             contact = msg_info["contact"]
             incoming_text = msg_info["text"]
@@ -839,7 +939,7 @@ class WhatsAppAutoResponder:
             print(f"💬 Message: \"{incoming_text}\"")
             print(f"👤 Generating reply as {self.user_name} via Groq...")
             
-            # 4. Generate AI reply
+            # 4. Generate AI reply using full recent conversation context
             ai_reply = self.generate_ai_reply(contact, incoming_text, recent_history=recent_history)
             
             if ai_reply == "IGNORE":
@@ -852,6 +952,9 @@ class WhatsAppAutoResponder:
             
             # 5. Send the reply
             sent = self.send_reply(ai_reply)
+            
+            # Update activity timestamp upon sending reply
+            self.last_activity_timestamp = time.time()
             
             # ALWAYS record fingerprint and sent reply history to prevent repeated loops
             self.replied_fingerprints.add(fingerprint)

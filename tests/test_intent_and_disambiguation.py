@@ -39,6 +39,9 @@ class TestIntentAndDisambiguation(unittest.TestCase):
 
     def test_classify_intent_web(self):
         self.assertEqual(classify_intent('open whatsapp in web and send message to Harsha'), 'web')
+        self.assertEqual(classify_intent('activate whatsapp'), 'web')
+        self.assertEqual(classify_intent('start whatsapp auto responder'), 'web')
+        self.assertEqual(classify_intent('stop whatsapp auto responder'), 'web')
         self.assertEqual(classify_intent('open canva'), 'web')
         self.assertEqual(classify_intent('open instagram'), 'web')
         self.assertEqual(classify_intent('search google for AI news'), 'web')
@@ -160,6 +163,49 @@ class TestIntentAndDisambiguation(unittest.TestCase):
 
         audio_res = client.get('/assets/videos/video_manifest.json')
         self.assertEqual(audio_res.headers.get('access-control-allow-origin'), '*')
+
+    @patch('server.app.start_whatsapp_auto_responder')
+    @patch('server.app.generate_speech_file', new_callable=AsyncMock)
+    def test_activate_whatsapp_command(self, mock_speech, mock_start):
+        mock_speech.return_value = '/assets/audio_cache/test.mp3'
+        mock_start.return_value = (True, "WhatsApp Auto-Responder started.")
+
+        from fastapi import BackgroundTasks
+        bg = BackgroundTasks()
+
+        req = ChatRequest(message='activate whatsapp', agent='main')
+        res = asyncio.run(chat_endpoint(req, bg))
+
+        self.assertTrue(res['success'])
+        self.assertEqual(res['current_agent'], 'web')
+        self.assertEqual(res['action']['action'], 'auto_responder_activated')
+        self.assertIn('25 seconds', res['response'])
+        mock_start.assert_called_once()
+
+    @patch('server.app.stop_whatsapp_auto_responder')
+    @patch('server.app.generate_speech_file', new_callable=AsyncMock)
+    def test_stop_whatsapp_command(self, mock_speech, mock_stop):
+        mock_speech.return_value = '/assets/audio_cache/test.mp3'
+        mock_stop.return_value = (True, "WhatsApp Auto-Responder stopped.")
+
+        from fastapi import BackgroundTasks
+        bg = BackgroundTasks()
+
+        req = ChatRequest(message='stop whatsapp', agent='web')
+        res = asyncio.run(chat_endpoint(req, bg))
+
+        self.assertTrue(res['success'])
+        self.assertEqual(res['action']['action'], 'auto_responder_stopped')
+        self.assertIn('stopped', res['response'].lower())
+        mock_stop.assert_called_once()
+
+    def test_whatsapp_auto_responder_endpoints(self):
+        client = TestClient(app)
+        res = client.get('/api/whatsapp/auto-responder/status')
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertTrue(data['success'])
+        self.assertEqual(data['inactivity_limit_seconds'], 25.0)
 
 
 if __name__ == '__main__':

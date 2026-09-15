@@ -172,7 +172,7 @@ class LocalLLMService:
                         model=groq.model,
                         messages=messages,
                         temperature=0.7,
-                        max_tokens=1024,
+                        max_tokens=800,
                         top_p=0.95
                     )
                     return resp.choices[0].message.content
