@@ -9,8 +9,8 @@ and launches the application seamlessly across Windows, macOS, and Linux.
 Usage:
     python main.py
     python main.py --key <GROQ_API_KEY>
-    python main.py --agent web|desktop|research|chatbot|main
-    python main.py --demo
+    python main.py --agent computer|web|desktop|research|chatbot|main
+    python main.py --port 8080 --headless
     python main.py --no-reload
     python main.py --headless
 
@@ -333,16 +333,16 @@ def run_demo() -> None:
     llm = GroqLLM()
     test_commands = [
         "Open WhatsApp Web and send a message to Rahul saying I'll call him after 6 PM",
-        "Go to Instagram and check my notifications",
-        "Create a presentation in Canva about artificial intelligence"
+        "Create a presentation in Canva about artificial intelligence",
+        "Open Notepad and type meeting notes for Pacific AI"
     ]
 
     tools = [
         {"name": "browser.open", "description": "Open a URL", "parameters": {"url": "string"}},
         {"name": "browser.click", "description": "Click an element", "parameters": {"selector": "string"}},
-        {"name": "browser.type", "description": "Type text", "parameters": {"selector": "string", "text": "string"}},
-        {"name": "browser.read", "description": "Read page content", "parameters": {"selector": "string"}},
-        {"name": "browser.wait", "description": "Wait for time", "parameters": {"seconds": "number"}}
+        {"name": "computer.launch_app", "description": "Launch desktop application", "parameters": {"app_name": "string"}},
+        {"name": "computer.type_text", "description": "Type text into active window", "parameters": {"text": "string"}},
+        {"name": "computer.powershell", "description": "Execute diagnostic query via PowerShell", "parameters": {"command": "string"}}
     ]
 
     for i, cmd in enumerate(test_commands, 1):
@@ -417,7 +417,7 @@ if __name__ == "__main__":
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
     parser.add_argument("--key", type=str, default=None, help="Groq API Key (uses embedded fallback if omitted)")
-    parser.add_argument("--agent", type=str, default="main", help="Initial agent (main, web, desktop, research, chatbot)")
+    parser.add_argument("--agent", type=str, default="main", help="Initial agent (main, computer, web, desktop, research, chatbot)")
     parser.add_argument("--port", type=int, default=8000, help="Local server port")
     parser.add_argument("--host", type=str, default="127.0.0.1", help="Server host address")
     parser.add_argument("--no-reload", action="store_true", help="Disable live auto-reloading")
