@@ -12,6 +12,21 @@
         "description": "Move cursor"
       }
     ],
-    "created_at": 1789546044.360715
+    "created_at": 1789548215.9934661
+  },
+  "test_e2e_routine": {
+    "name": "test_e2e_routine",
+    "description": "Verification routine",
+    "steps": [
+      {
+        "tool": "point_to",
+        "params": {
+          "x": 200,
+          "y": 200
+        },
+        "description": "Point at coordinate"
+      }
+    ],
+    "created_at": 1789548217.102905
   }
 }

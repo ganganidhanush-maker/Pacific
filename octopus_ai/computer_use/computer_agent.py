@@ -32,34 +32,58 @@ class ComputerAgent:
         self.router = computer_router
         self.watchdog = watchdog
         self.policy = policy_engine
+        # Agent Continuity State
+        self.last_target_app: Optional[str] = None
+        self.last_target_window: Optional[str] = None
+        self.last_created_file: Optional[str] = None
+        self.last_task_output: Optional[str] = None
+        self.context: Dict[str, Any] = {}
         # Ensure watchdog is running for instant ESC emergency stop
         self.watchdog.start()
 
     def execute_action(self, tool: str, params: Dict[str, Any], description: str = "", task_id: str = "") -> ActionResult:
-        """Execute a single structured desktop action."""
+        """Execute a single structured desktop action and record continuity state."""
         action = ComputerAction(
             tool=tool,
             params=params,
             description=description,
             task_id=task_id or f"task_{int(time.time()*1000)}",
         )
-        return self.router.execute(action)
+        res = self.router.execute(action)
+
+        # Update continuity memory
+        if res.success:
+            if tool in ["launch_app", "open_app"]:
+                self.last_target_app = params.get("app_name") or params.get("app")
+            elif tool in ["focus_window", "switch_window"]:
+                self.last_target_window = params.get("title")
+            elif tool == "file_operation" and params.get("operation") in ["write", "overwrite", "append"]:
+                self.last_created_file = params.get("path")
+            if res.output:
+                self.last_task_output = str(res.output)[:1000]
+
+        return res
 
     def observe(self, include_elements: bool = True) -> Observation:
         """Capture current desktop state."""
         return self.router.windows.observe(include_elements=include_elements)
 
-    async def run_task(self, task_goal: str, task_id: Optional[str] = None) -> Dict[str, Any]:
+    async def run_task(self, task_goal: str, task_id: Optional[str] = None, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
-        Execute an autonomous multi-step computer-use task using Observe -> Think -> Act -> Verify loop.
+        Execute an autonomous multi-step computer-use task using Observe -> Think -> Act -> Verify loop,
+        with full multi-turn agent continuity.
         """
+        if context:
+            self.context.update(context)
+
         if task_id is None:
             task_id = f"cu_{int(time.time()*1000)}"
 
         desktop_state.active_task_id = task_id
         desktop_state.reset_abort()
 
-        logger.info("Starting ComputerAgent task [%s]: '%s'", task_id, task_goal)
+        logger.info("Starting ComputerAgent task [%s]: '%s' (Continuity: app=%s, file=%s)",
+                    task_id, task_goal, self.last_target_app, self.last_created_file)
         start_time = time.time()
         step_logs: List[Dict[str, Any]] = []
 
@@ -140,14 +164,41 @@ class ComputerAgent:
         # Simple heuristic fallback rules for instant response without latency
         goal_lower = goal.lower()
 
+        # 0. Multi-Turn Continuity & Pronoun Resolution ("it", "that", "the app", "the file")
+        if ("close" in goal_lower or "exit" in goal_lower or "quit" in goal_lower) and any(w in goal_lower for w in ["it", "app", "window", "that"]):
+            target = self.last_target_app or self.last_target_window or "notepad"
+            return [{"tool": "close_window", "params": {"title": target}, "description": f"Close {target} window"}]
+
+        if any(act in goal_lower for act in ["type", "write", "paste", "put", "insert"]) and any(w in goal_lower for w in ["it", "there", "in that", "into it", "in it", "in notepad", "in there"]):
+            target = self.last_target_app or "notepad"
+            content = self.context.get("last_research_text") or "Pacific AI continuing context notes.\n"
+            return [
+                {"tool": "focus_window", "params": {"title": target}, "description": f"Focus {target}"},
+                {"tool": "type_text", "params": {"text": content}, "description": f"Type content into {target}"}
+            ]
+
+        if "save" in goal_lower and any(w in goal_lower for w in ["it", "file", "document", "notes"]):
+            return [{"tool": "shortcut", "params": {"keys": ["ctrl", "s"]}, "description": "Save active document via Ctrl+S"}]
+
+        if ("delete" in goal_lower or "remove" in goal_lower) and any(w in goal_lower for w in ["it", "file"]) and self.last_created_file:
+            return [{"tool": "file_operation", "params": {"operation": "delete", "path": self.last_created_file}, "description": f"Delete {self.last_created_file}"}]
+
+        if "read" in goal_lower and any(w in goal_lower for w in ["it", "file", "document"]) and self.last_created_file:
+            return [{"tool": "file_operation", "params": {"operation": "read", "path": self.last_created_file}, "description": f"Read back {self.last_created_file}"}]
+
         # 1. Notepad workflow
         if "notepad" in goal_lower and ("open" in goal_lower or "launch" in goal_lower or "write" in goal_lower or "notes" in goal_lower):
+            self.last_target_app = "notepad"
             steps = [{"tool": "launch_app", "params": {"app_name": "notepad"}, "description": "Open Notepad application"}]
-            # If text writing is requested
             if "type" in goal_lower or "write" in goal_lower or "notes" in goal_lower:
                 text_to_type = "Pacific AI Meeting Notes\n- Task completed autonomously\n- Integration active\n"
                 steps.append({"tool": "type_text", "params": {"text": text_to_type}, "description": "Type meeting notes into Notepad"})
             return steps
+
+        # 1b. Calculator workflow
+        if any(w in goal_lower for w in ["calculator", "calc"]) and ("open" in goal_lower or "launch" in goal_lower):
+            self.last_target_app = "calc"
+            return [{"tool": "launch_app", "params": {"app_name": "calc"}, "description": "Launch Windows Calculator"}]
 
         # 2. PowerShell / Shell diagnostic
         if any(w in goal_lower for w in ["powershell", "run command", "terminal", "system info", "check disk", "cpu"]):

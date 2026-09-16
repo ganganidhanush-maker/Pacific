@@ -371,19 +371,42 @@ class WindowsUseAdapter:
         except Exception:
             return (0, 0)
 
-    def move_mouse(self, x: int, y: int) -> bool:
-        if desktop_state.is_aborted:
-            return False
+    def get_screen_size(self) -> Tuple[int, int]:
         if sys.platform == "win32":
             try:
                 import win32api
-                win32api.SetCursorPos((x, y))
+                import win32con
+                w = win32api.GetSystemMetrics(win32con.SM_CXSCREEN)
+                h = win32api.GetSystemMetrics(win32con.SM_CYSCREEN)
+                if w > 0 and h > 0:
+                    return (w, h)
+            except Exception:
+                pass
+        try:
+            import pyautogui
+            size = pyautogui.size()
+            return (size.width, size.height)
+        except Exception:
+            return (1920, 1080)
+
+    def move_mouse(self, x: int, y: int) -> bool:
+        if desktop_state.is_aborted:
+            return False
+        screen_size = self.get_screen_size()
+        cx = max(0, min(screen_size[0] - 1, int(x)))
+        cy = max(0, min(screen_size[1] - 1, int(y)))
+
+        if sys.platform == "win32":
+            try:
+                import win32api
+                win32api.SetCursorPos((cx, cy))
                 return True
             except Exception:
                 pass
         try:
             import pyautogui
-            pyautogui.moveTo(x, y, duration=0.1)
+            pyautogui.FAILSAFE = False
+            pyautogui.moveTo(cx, cy, duration=0.1)
             return True
         except Exception:
             return False
@@ -420,6 +443,7 @@ class WindowsUseAdapter:
 
         try:
             import pyautogui
+            pyautogui.FAILSAFE = False
             if double:
                 pyautogui.doubleClick(button=button)
             else:
@@ -448,24 +472,46 @@ class WindowsUseAdapter:
 
         try:
             import pyautogui
+            pyautogui.FAILSAFE = False
             pyautogui.scroll(clicks * 100)
             return True
         except Exception:
             return False
 
     def type_text(self, text: str, interval: float = 0.02) -> bool:
-        """Type text into active focused element."""
+        """Type text into active focused element with full Unicode, emoji, and multi-lingual support."""
         if desktop_state.is_aborted:
             return False
 
         logger.info("Typing text (length=%d)", len(text))
+        # If text contains non-ASCII characters, newlines, tabs, or is long (>40 chars),
+        # use native Win32 Unicode clipboard paste (100% reliable, never drops chars or fails on cp1252)
+        has_unicode = any(ord(c) > 127 for c in text) or "\n" in text or len(text) > 40
+        if has_unicode and sys.platform == "win32":
+            try:
+                import win32clipboard
+                import win32con
+                import pyautogui
+                pyautogui.FAILSAFE = False
+
+                win32clipboard.OpenClipboard()
+                win32clipboard.EmptyClipboard()
+                win32clipboard.SetClipboardText(text, win32con.CF_UNICODETEXT)
+                win32clipboard.CloseClipboard()
+
+                time.sleep(0.05)
+                pyautogui.hotkey("ctrl", "v")
+                time.sleep(0.05)
+                return True
+            except Exception as clip_err:
+                logger.debug("Win32 clipboard paste error, attempting fallback: %s", clip_err)
+
         try:
             import pyautogui
-            # PyAutoGUI handles clipboard paste for non-ASCII characters reliably
+            pyautogui.FAILSAFE = False
             pyautogui.write(text, interval=interval)
             return True
         except Exception:
-            # Fallback to direct key simulation
             try:
                 import keyboard
                 keyboard.write(text, delay=interval)
@@ -522,6 +568,7 @@ class WindowsUseAdapter:
                 "exit_code": proc.returncode,
                 "stdout": stdout.strip(),
                 "stderr": stderr.strip(),
+                "error": stderr.strip() if not success else None,
             }
         except subprocess.TimeoutExpired:
             return {"success": False, "error": f"Command timed out after {timeout}s", "stdout": "", "stderr": ""}

@@ -31,6 +31,10 @@ class MasterOrchestrator:
         self.research_agent = research_agent_instance
         self.chatbot_agent = chatbot_agent_instance
         self.computer_agent = computer_agent_instance
+        # Cross-Agent Continuity & Memory
+        self.session_memory: Dict[str, Any] = {}
+        self.last_research_text: Optional[str] = None
+        self.last_computer_output: Optional[str] = None
 
     async def optimize_and_decompose(self, raw_prompt: str) -> Dict[str, Any]:
         """
@@ -80,7 +84,15 @@ class MasterOrchestrator:
             "pointer", "mouse", "windows", "close app", "shortcut", "press", "active window",
             "minimize", "maximize", "inspect ui", "routine"
         ]
-        requires_comp = any(w in p_lower for w in computer_keywords)
+        continuity_triggers = [
+            "close it", "exit it", "quit it", "type in it", "write in it", "save it",
+            "paste it", "delete it", "read it back", "put it there", "put that in",
+            "type that", "save that", "close that"
+        ]
+        has_continuity = any(ct in p_lower for ct in continuity_triggers) and bool(
+            self.computer_agent.last_target_app or self.computer_agent.last_created_file or self.last_research_text
+        )
+        requires_comp = any(w in p_lower for w in computer_keywords) or has_continuity
 
         plan = {
             "primary_intent": raw_prompt,
@@ -264,6 +276,17 @@ class MasterOrchestrator:
                 elif isinstance(res, dict):
                     execution_report["subagent_results"].update(res.get("results", {}))
                     execution_report["summary_bullets"].extend(res.get("bullets", []))
+
+            # Store cross-agent continuity artifacts
+            sub_res = execution_report["subagent_results"]
+            if "research" in sub_res:
+                r_val = sub_res["research"]
+                self.last_research_text = str(r_val.get("synthesis") or r_val) if isinstance(r_val, dict) else str(r_val)
+                self.computer_agent.context["last_research_text"] = self.last_research_text
+
+            if "computer_task" in sub_res:
+                self.last_computer_output = str(sub_res["computer_task"])
+                self.session_memory["last_computer"] = sub_res["computer_task"]
 
         # 2. CHATBOT AGENT (If pure conversational Q&A without tool delegation)
         else:
