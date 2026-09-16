@@ -1,0 +1,17 @@
+{
+  "test_routine_1": {
+    "name": "test_routine_1",
+    "description": "Test routine",
+    "steps": [
+      {
+        "tool": "move_mouse",
+        "params": {
+          "x": 100,
+          "y": 100
+        },
+        "description": "Move cursor"
+      }
+    ],
+    "created_at": 1789546044.360715
+  }
+}

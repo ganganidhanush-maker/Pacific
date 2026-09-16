@@ -18,6 +18,7 @@ from .subagents.web_agent import web_agent_instance
 from .subagents.desktop_agent import desktop_agent_instance
 from .subagents.research_agent import research_agent_instance
 from .subagents.chatbot_agent import chatbot_agent_instance
+from computer_use import computer_agent_instance
 from server.local_llm_service import local_llm_instance
 
 logger = logging.getLogger("MasterOrchestrator")
@@ -29,6 +30,7 @@ class MasterOrchestrator:
         self.desktop_agent = desktop_agent_instance
         self.research_agent = research_agent_instance
         self.chatbot_agent = chatbot_agent_instance
+        self.computer_agent = computer_agent_instance
 
     async def optimize_and_decompose(self, raw_prompt: str) -> Dict[str, Any]:
         """
@@ -72,18 +74,31 @@ class MasterOrchestrator:
 
         # Rule-based fallback decomposition if LLM output isn't strict JSON
         p_lower = raw_prompt.lower()
+        computer_keywords = [
+            "notepad", "calculator", "calc", "click", "type", "open app", "launch app",
+            "powershell", "terminal", "switch to", "bring to front", "screen", "highlight",
+            "pointer", "mouse", "windows", "close app", "shortcut", "press", "active window",
+            "minimize", "maximize", "inspect ui", "routine"
+        ]
+        requires_comp = any(w in p_lower for w in computer_keywords)
+
         plan = {
             "primary_intent": raw_prompt,
             "requires_web": any(w in p_lower for w in ["whatsapp", "canva", "instagram", "search", "google", "web"]),
-            "requires_desktop": any(w in p_lower for w in ["file", "pdf", "touch", "move", "desktop", "script", "folder", "local"]),
+            "requires_desktop": any(w in p_lower for w in ["file", "pdf", "touch", "move", "desktop", "script", "folder", "local"]) and not requires_comp,
+            "requires_computer": requires_comp,
             "requires_research": any(w in p_lower for w in ["research", "explain", "slide", "ppt", "presentation", "syllabus"]),
             "requires_chat": False,
             "web_tasks": [],
             "desktop_tasks": [],
+            "computer_tasks": [raw_prompt] if requires_comp else [],
             "research_tasks": [],
             "whatsapp_context": None,
             "spoken_summary": "I've understood your request and am coordinating the sub-agents now."
         }
+
+        if requires_comp:
+            plan["spoken_summary"] = "Computer Agent is controlling the Windows desktop to fulfill your request."
 
         if "whatsapp" in p_lower or "ptm" in p_lower:
             plan["requires_web"] = True
@@ -102,7 +117,7 @@ class MasterOrchestrator:
             plan["web_tasks"].append("canva_design")
             plan["research_tasks"].append(raw_prompt)
 
-        if "pdf" in p_lower or "file" in p_lower:
+        if ("pdf" in p_lower or "file" in p_lower) and not requires_comp:
             plan["requires_desktop"] = True
             plan["desktop_tasks"].append("find_files")
 
@@ -185,6 +200,27 @@ class MasterOrchestrator:
             res["bullets"].append(f"⚠️ Desktop Agent Notice: {e}")
         return res
 
+    async def _execute_computer_subtask(self, plan: Dict[str, Any], raw_prompt: str) -> Dict[str, Any]:
+        """Execute autonomous Windows computer use actions via ComputerAgent."""
+        res: Dict[str, Any] = {"results": {}, "bullets": []}
+        try:
+            task_res = await self.computer_agent.run_task(raw_prompt)
+            res["results"]["computer_task"] = task_res
+            if task_res.get("success"):
+                res["bullets"].append(
+                    f"🖥️ Computer Agent: Successfully completed '{raw_prompt}' in {task_res.get('duration_sec')}s "
+                    f"({task_res.get('steps_executed')} action steps)."
+                )
+            elif task_res.get("aborted"):
+                res["bullets"].append("🛑 Computer Agent: Halted immediately by emergency stop (ESC).")
+            else:
+                res["bullets"].append(f"⚠️ Computer Agent Notice: {task_res.get('spoken_summary')}")
+        except Exception as e:
+            logger.error(f"[Orchestrator] Computer subtask error: {e}")
+            res["results"]["computer_error"] = str(e)
+            res["bullets"].append(f"⚠️ Computer Agent Notice: {e}")
+        return res
+
     async def execute_plan(self, plan: Dict[str, Any], raw_prompt: str) -> Dict[str, Any]:
         """
         Execute decomposed subagent tasks concurrently using dynamic parallelism (asyncio.gather).
@@ -212,6 +248,10 @@ class MasterOrchestrator:
         if plan.get("requires_desktop"):
             coros.append(self._execute_desktop_subtask(plan, raw_prompt))
             labels.append("desktop")
+
+        if plan.get("requires_computer"):
+            coros.append(self._execute_computer_subtask(plan, raw_prompt))
+            labels.append("computer")
 
         # 1. DYNAMIC PARALLEL EXECUTION (Runs independent subagents simultaneously)
         if coros:

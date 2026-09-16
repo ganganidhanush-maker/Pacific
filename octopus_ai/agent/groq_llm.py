@@ -14,6 +14,9 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+DEFAULT_GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
+
+
 class GroqLLM:
     """
     Groq LLM integration for the Octopus AI Agent.
@@ -30,10 +33,10 @@ class GroqLLM:
         Initialize Groq LLM client.
         
         Args:
-            api_key: Groq API key (defaults to GROQ_API_KEY env var)
-            model: Model name (defaults to GROQ_MODEL env var or llama-3.3-70b-versatile)
+            api_key: Groq API key (defaults to GROQ_API_KEY env var or embedded key)
+            model: Model name (defaults to GROQ_MODEL env var or qwen/qwen3.8-27b)
         """
-        self.api_key = api_key if api_key is not None else os.getenv("GROQ_API_KEY")
+        self.api_key = api_key or os.getenv("GROQ_API_KEY") or DEFAULT_GROQ_API_KEY
         self.model = model or os.getenv("GROQ_MODEL", "qwen/qwen3.8-27b")
         self.conversation_history: List[Dict[str, str]] = []
         

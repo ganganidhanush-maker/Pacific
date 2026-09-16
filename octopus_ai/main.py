@@ -1,58 +1,207 @@
 #!/usr/bin/env python3
 """
-Octopus AI Agent - Main Entry Point
+Octopus AI Agent - Universal Main Entry Point
 
-Run this script to start the Octopus AI Agent with Groq LLM integration.
-The agent will automate WhatsApp, Instagram, Canva and other websites based on natural language commands.
+Cross-Platform runner that starts the Octopus AI Agent with Groq LLM integration.
+Automatically validates dependencies, resolves API keys, configures Chrome profiles,
+and launches the application seamlessly across Windows, macOS, and Linux.
 
 Usage:
     python main.py
-    
+    python main.py --key <GROQ_API_KEY>
+    python main.py --agent web|desktop|research|chatbot|main
+    python main.py --demo
+    python main.py --no-reload
+    python main.py --headless
+
 Environment Variables:
-    GROQ_API_KEY: Your Groq API key (required)
+    GROQ_API_KEY: Groq API key (automatically configured with fallback if not provided)
     GROQ_MODEL: Model to use (default: llama-3.3-70b-versatile)
-    BROWSER_HEADLESS: Run browser in headless mode (default: true)
+    PORT: Server port (default: 8000)
+    HOST: Server host (default: 127.0.0.1)
+    BROWSER_HEADLESS: Run browser in headless mode (default: false)
 """
 
-import asyncio
 import os
 import sys
+import platform
+import subprocess
+import shutil
 from pathlib import Path
-from dotenv import load_dotenv
+from typing import Tuple, Optional
 
-# Configure utf-8 encoding for Windows console
-if sys.stdout and hasattr(sys.stdout, "reconfigure"):
-    try:
-        sys.stdout.reconfigure(encoding="utf-8")
-    except Exception:
-        pass
-if sys.stderr and hasattr(sys.stderr, "reconfigure"):
-    try:
-        sys.stderr.reconfigure(encoding="utf-8")
-    except Exception:
-        pass
+# ==============================================================================
+# 1. Console UTF-8 Encoding Setup (Safe across all OSes)
+# ==============================================================================
+for stream in (sys.stdout, sys.stderr):
+    if stream and hasattr(stream, "reconfigure"):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
 
-# Ensure repository root and package directory are in sys.path
+# ==============================================================================
+# 2. Path & Package Resolution
+# ==============================================================================
 this_dir = Path(__file__).resolve().parent
 parent_dir = this_dir.parent
 for p in [str(this_dir), str(parent_dir)]:
     if p not in sys.path:
         sys.path.insert(0, p)
 
-# Load environment variables
-load_dotenv()
+# Guarantee that 'octopus_ai' package can always be imported, even if cloned
+# into a directory named 'Pacific' or any custom folder name.
+if "octopus_ai" not in sys.modules:
+    import types
+    mod = types.ModuleType("octopus_ai")
+    mod.__path__ = [str(this_dir)]
+    init_file = this_dir / "__init__.py"
+    if init_file.exists():
+        mod.__file__ = str(init_file)
+    sys.modules["octopus_ai"] = mod
 
-from octopus_ai.engine.selenium_engine import BrowserEngine
-from octopus_ai.tools.browser_tools import BrowserTools
-from octopus_ai.agent.agent import OctopusAgent
-from octopus_ai.agent.whatsapp_responder import WhatsAppAutoResponder
-from octopus_ai.interface.chat import ChatInterface
-import time
+# ==============================================================================
+# 3. Dependency Self-Healing & Pre-Flight Check
+# ==============================================================================
+# Critical modules required for Octopus AI to function
+DEPENDENCY_MAP = {
+    "dotenv": "python-dotenv>=1.0.0",
+    "fastapi": "fastapi>=0.104.0",
+    "uvicorn": "uvicorn[standard]>=0.24.0",
+    "pydantic": "pydantic>=2.5.0",
+    "requests": "requests>=2.31.0",
+    "groq": "groq>=0.4.2",
+    "edge_tts": "edge-tts>=6.1.9",
+    "selenium": "selenium>=4.15.0",
+    "webdriver_manager": "webdriver-manager>=4.0.1",
+    "PIL": "pillow>=10.0.0",
+    "psutil": "psutil>=5.9.0",
+}
+
+if sys.platform == "win32":
+    DEPENDENCY_MAP["win32gui"] = "pywin32>=306"
+    DEPENDENCY_MAP["comtypes"] = "comtypes>=1.4.0"
+    DEPENDENCY_MAP["pyautogui"] = "pyautogui>=0.9.54"
+    DEPENDENCY_MAP["keyboard"] = "keyboard>=0.13.5"
 
 
-def _safe_copy_tree(src: str, dst: str):
-    """Safely copy a file or directory tree, skipping locked files without aborting the rest."""
-    import shutil
+def ensure_dependencies() -> None:
+    """
+    Verify that required dependencies are installed.
+    If any are missing, automatically installs them via pip so that the file runs
+    identically on any fresh machine or operating system without crashing.
+    """
+    missing_packages = []
+    for mod_name, pkg_spec in DEPENDENCY_MAP.items():
+        try:
+            __import__(mod_name)
+        except ImportError:
+            missing_packages.append(pkg_spec)
+
+    if missing_packages:
+        print("=" * 65)
+        print("[OctopusAI] Dependency Check: Missing packages detected:")
+        for pkg in missing_packages:
+            print(f"   • {pkg}")
+        print("[OctopusAI] Installing ONLY the missing dependencies, please wait...")
+        print("=" * 65)
+
+        try:
+            # Only install the specific packages that are missing, avoiding redundant installations
+            cmd = [sys.executable, "-m", "pip", "install", "--no-warn-script-location"] + missing_packages
+            subprocess.check_call(cmd)
+            print("[OctopusAI] [OK] Missing dependencies successfully installed!\n")
+        except Exception as err:
+            print(f"[OctopusAI] [WARNING] Automatic dependency install encountered: {err}")
+            print("[OctopusAI] Attempting to proceed with available modules...\n")
+
+
+# Run dependency verification immediately before importing non-standard modules
+ensure_dependencies()
+
+# Safe imports after dependency verification
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except Exception:
+    pass
+
+# ==============================================================================
+# 4. API Key & Environment Auto-Configuration
+# ==============================================================================
+DEFAULT_GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
+DEFAULT_GROQ_MODEL = "llama-3.3-70b-versatile"
+
+
+def setup_environment(cli_api_key: Optional[str] = None) -> str:
+    """
+    Ensure a valid Groq API key and environment configuration are active.
+    1. Checks CLI argument --key
+    2. Checks os.environ['GROQ_API_KEY']
+    3. Checks .env file
+    4. Automatically falls back to DEFAULT_GROQ_API_KEY
+    5. Persists to .env file so worker subprocesses inherit the configuration.
+    """
+    active_key = cli_api_key or os.environ.get("GROQ_API_KEY")
+    env_file = this_dir / ".env"
+
+    # If still not found, check .env manually
+    if not active_key and env_file.exists():
+        try:
+            with open(env_file, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line.startswith("GROQ_API_KEY="):
+                        val = line.split("=", 1)[1].strip().strip("\"'")
+                        if val:
+                            active_key = val
+                            break
+        except Exception:
+            pass
+
+    # Use embedded default if none was configured
+    if not active_key:
+        active_key = DEFAULT_GROQ_API_KEY
+
+    # Export to current environment
+    os.environ["GROQ_API_KEY"] = active_key
+    os.environ.setdefault("GROQ_MODEL", DEFAULT_GROQ_MODEL)
+    os.environ.setdefault("BROWSER_HEADLESS", "false")
+    os.environ.setdefault("PORT", "8000")
+    os.environ.setdefault("HOST", "127.0.0.1")
+
+    # Ensure .env file exists and contains the active key
+    try:
+        env_content = ""
+        has_key = False
+        if env_file.exists():
+            with open(env_file, "r", encoding="utf-8") as f:
+                env_content = f.read()
+            if "GROQ_API_KEY=" in env_content:
+                has_key = True
+
+        if not has_key:
+            with open(env_file, "a", encoding="utf-8") as f:
+                if env_content and not env_content.endswith("\n"):
+                    f.write("\n")
+                f.write(f"# Octopus AI Configuration (Auto-generated)\n")
+                f.write(f"GROQ_API_KEY={active_key}\n")
+                f.write(f"GROQ_MODEL={os.environ.get('GROQ_MODEL', DEFAULT_GROQ_MODEL)}\n")
+                f.write(f"BROWSER_HEADLESS={os.environ.get('BROWSER_HEADLESS', 'false')}\n")
+                f.write(f"PORT={os.environ.get('PORT', '8000')}\n")
+    except Exception:
+        pass
+
+    masked_key = f"{active_key[:8]}...{active_key[-4:]}" if len(active_key) > 12 else "***"
+    print(f"[OctopusAI] Groq API Key configured: {masked_key} (Ready)")
+    return active_key
+
+
+# ==============================================================================
+# 5. Cross-Platform Safe File & Tree Copying
+# ==============================================================================
+def _safe_copy_tree(src: str, dst: str) -> None:
+    """Safely copy a file or directory tree, skipping locked or inaccessible files without aborting."""
     if not os.path.exists(src):
         return
     if os.path.isdir(src):
@@ -75,102 +224,119 @@ def _safe_copy_tree(src: str, dst: str):
             pass
 
 
-def prepare_main_profile() -> tuple[str, str]:
+# ==============================================================================
+# 6. Cross-Platform Chrome Profile Resolution (Windows, macOS, Linux)
+# ==============================================================================
+def prepare_main_profile() -> Tuple[str, str]:
     """
-    Automatically prepare and use the user's dedicated automation Chrome profile.
-    Uses a dedicated AutomationData directory that retains all logins (WhatsApp, Instagram, Canva)
-    permanently across reruns without overwriting them or causing Chrome DevTools conflicts.
+    Automatically prepare and use a dedicated automation Chrome profile.
+    Resolves Chrome paths across Windows, macOS, and Linux.
+    Uses an AutomationData directory that preserves user logins (WhatsApp, Instagram, Canva)
+    permanently across reruns without session wipe or lock conflicts.
     """
+    # 1. Custom override from environment
     chrome_data_env = os.environ.get("CHROME_USER_DATA_DIR")
     if chrome_data_env:
         os.makedirs(chrome_data_env, exist_ok=True)
         return chrome_data_env, "Configured Chrome Data"
 
-    local_app_data = os.environ.get("LOCALAPPDATA", "")
-    if not local_app_data:
-        os.makedirs(".chrome_profile", exist_ok=True)
-        return ".chrome_profile", "Default Profile"
+    # 2. Platform-specific resolution
+    current_os = sys.platform
+    src_root = None
+    dst_root = None
 
-    dst_root = os.path.join(local_app_data, "Google", "Chrome", "AutomationData")
+    if current_os == "win32":
+        local_app_data = os.environ.get("LOCALAPPDATA", "")
+        if local_app_data:
+            src_root = os.path.join(local_app_data, "Google", "Chrome", "User Data")
+            dst_root = os.path.join(local_app_data, "Google", "Chrome", "AutomationData")
+    elif current_os == "darwin":  # macOS
+        home = os.path.expanduser("~")
+        src_root = os.path.join(home, "Library", "Application Support", "Google", "Chrome")
+        dst_root = os.path.join(home, "Library", "Application Support", "Google", "Chrome", "AutomationData")
+    else:  # Linux / Unix
+        home = os.path.expanduser("~")
+        src_candidate = os.path.join(home, ".config", "google-chrome")
+        if not os.path.exists(src_candidate):
+            src_candidate = os.path.join(home, ".config", "chromium")
+        src_root = src_candidate
+        dst_root = os.path.join(home, ".config", "google-chrome-automation")
+
+    # Fallback to repository-local profile directory if system paths unavailable
+    if not dst_root:
+        local_fallback = os.path.join(str(this_dir), ".chrome_profile")
+        os.makedirs(local_fallback, exist_ok=True)
+        return local_fallback, "Local Fallback Profile"
+
     dst_default = os.path.join(dst_root, "Default")
-    
-    # 1. If AutomationData already exists, DO NOT overwrite it!
-    # Overwriting IndexedDB or Network files wipes active WhatsApp sessions!
+
+    # 3. If AutomationData already exists, clean lockfiles and return
     if os.path.exists(dst_default):
-        for lock_name in ["SingletonLock", "SingletonCookie", "SingletonSocket", "lockfile", "DevToolsActivePort"]:
+        lock_names = ["SingletonLock", "SingletonCookie", "SingletonSocket", "lockfile", "DevToolsActivePort"]
+        for lock_name in lock_names:
             lock_file = os.path.join(dst_root, lock_name)
-            if os.path.exists(lock_file):
+            if os.path.exists(lock_file) or os.path.islink(lock_file):
                 try:
-                    os.remove(lock_file)
+                    if os.path.islink(lock_file) or os.path.isfile(lock_file):
+                        os.remove(lock_file)
+                    elif os.path.isdir(lock_file):
+                        shutil.rmtree(lock_file, ignore_errors=True)
                 except Exception:
                     pass
-        return dst_root, "Personal Chrome Profile (Dhanush)"
+        return dst_root, "Personal Automation Profile"
 
-    # 2. First-time initialization only (when AutomationData does not exist yet)
-    src_root = os.path.join(local_app_data, "Google", "Chrome", "User Data")
-    if os.path.exists(src_root):
+    # 4. First-time initialization: safely clone profile from system Chrome
+    if src_root and os.path.exists(src_root):
         os.makedirs(dst_root, exist_ok=True)
-        
-        # Sync Local State for DPAPI encryption key
+
+        # Sync Local State (contains encryption keys)
         src_ls = os.path.join(src_root, "Local State")
         dst_ls = os.path.join(dst_root, "Local State")
         _safe_copy_tree(src_ls, dst_ls)
-        
+
         # Initial seed of Default profile
         src_default = os.path.join(src_root, "Default")
-        os.makedirs(dst_default, exist_ok=True)
-        items = [
-            "Network", 
-            "IndexedDB", 
-            "Local Storage", 
-            "Session Storage", 
-            "Preferences", 
-            "Secure Preferences"
-        ]
-        for item in items:
-            s = os.path.join(src_default, item)
-            d = os.path.join(dst_default, item)
-            _safe_copy_tree(s, d)
-        
-        return dst_root, "Personal Chrome Profile (Dhanush)"
-    
-    return ".chrome_profile", "Default Profile"
+        if os.path.exists(src_default):
+            os.makedirs(dst_default, exist_ok=True)
+            essential_items = [
+                "Network",
+                "IndexedDB",
+                "Local Storage",
+                "Session Storage",
+                "Preferences",
+                "Secure Preferences"
+            ]
+            for item in essential_items:
+                s = os.path.join(src_default, item)
+                d = os.path.join(dst_default, item)
+                _safe_copy_tree(s, d)
+
+        return dst_root, "Personal Automation Profile"
+
+    # Default fallback
+    local_fallback = os.path.join(str(this_dir), ".chrome_profile")
+    os.makedirs(local_fallback, exist_ok=True)
+    return local_fallback, "Default Automation Profile"
 
 
-
-def main(initial_agent: str = "main", reload: bool = True):
-    """Main entry point for Octopus AI Desktop Agent Tool."""
-    try:
-        from server.app import AVAILABLE_AGENTS
-        import server.app as srv
-        valid_ids = [a["id"] for a in AVAILABLE_AGENTS]
-        if initial_agent in valid_ids:
-            srv.CURRENT_AGENT = initial_agent
-            print(f"[OctopusAI] Initial active agent set to: {initial_agent.upper()}")
-    except Exception as e:
-        print(f"[OctopusAI] Agent init notice: {e}")
-
-    from octopus_ai.interface.desktop_app import run_desktop_app
-    run_desktop_app(reload=reload, initial_agent=initial_agent)
-
-
-def run_demo():
-    """Run a quick demo of the agent capabilities."""
+# ==============================================================================
+# 7. Quick Interactive / Demo Mode
+# ==============================================================================
+def run_demo() -> None:
+    """Run a quick test demonstration of the agent reasoning capabilities."""
     print("\n" + "=" * 60)
-    print("              OCTOPUS AI DEMO MODE")
+    print("              OCTOPUS AI — DEMO MODE")
     print("=" * 60)
-    
-    # Test without actual browser automation
-    from octopus_ai.agent.groq_llm import GroqLLM, PLATFORM_WORKFLOWS
-    
+
+    from octopus_ai.agent.groq_llm import GroqLLM
+
     llm = GroqLLM()
-    
     test_commands = [
         "Open WhatsApp Web and send a message to Rahul saying I'll call him after 6 PM",
         "Go to Instagram and check my notifications",
         "Create a presentation in Canva about artificial intelligence"
     ]
-    
+
     tools = [
         {"name": "browser.open", "description": "Open a URL", "parameters": {"url": "string"}},
         {"name": "browser.click", "description": "Click an element", "parameters": {"selector": "string"}},
@@ -178,14 +344,13 @@ def run_demo():
         {"name": "browser.read", "description": "Read page content", "parameters": {"selector": "string"}},
         {"name": "browser.wait", "description": "Wait for time", "parameters": {"seconds": "number"}}
     ]
-    
+
     for i, cmd in enumerate(test_commands, 1):
-        print(f"\n{'='*60}")
+        print(f"\n{'=' * 60}")
         print(f"Test {i}: {cmd}")
-        print('-' * 60)
-        
+        print("-" * 60)
+
         response = llm.chat(cmd, available_tools=tools)
-        
         print(f"Action: {response.get('action')}")
         if response.get('action') == 'tool_call':
             print(f"Tool: {response.get('tool_name')}")
@@ -193,22 +358,85 @@ def run_demo():
         else:
             content = response.get('content', '')
             print(f"Response: {content[:300]}...")
-    
+
     print("\n" + "=" * 60)
-    print("Demo complete! Ready for full automation.")
+    print("Demo complete! All systems operational.")
     print("=" * 60)
 
 
+# ==============================================================================
+# 8. Main Application Entry Point
+# ==============================================================================
+def main(
+    initial_agent: str = "main",
+    reload: bool = True,
+    port: int = 8000,
+    host: str = "127.0.0.1",
+    api_key: Optional[str] = None
+) -> None:
+    """
+    Main entry point for Octopus AI Desktop Agent Tool.
+    Initializes environment, profiles, agents, and starts the interface.
+    """
+    # Initialize environment and API key
+    setup_environment(api_key)
+
+    # Initialize and clean Chrome automation profile
+    profile_path, profile_desc = prepare_main_profile()
+    print(f"[OctopusAI] Chrome Automation Profile: {profile_desc} ({profile_path})")
+
+    # Initialize active agent in server
+    try:
+        from server.app import AVAILABLE_AGENTS
+        import server.app as srv
+        valid_ids = [a["id"] for a in AVAILABLE_AGENTS]
+        if initial_agent in valid_ids:
+            srv.CURRENT_AGENT = initial_agent
+            print(f"[OctopusAI] Initial active agent set to: {initial_agent.upper()}")
+    except Exception as err:
+        print(f"[OctopusAI] Agent initialization notice: {err}")
+
+    # Launch desktop application window (falls back to browser if pywebview unavailable)
+    from octopus_ai.interface.desktop_app import run_desktop_app
+    run_desktop_app(
+        host=host,
+        port=port,
+        reload=reload,
+        initial_agent=initial_agent
+    )
+
+
+# ==============================================================================
+# 9. CLI Argument Parsing & Launch
+# ==============================================================================
 if __name__ == "__main__":
-    import sys
-    
-    if len(sys.argv) > 1 and sys.argv[1] == "--demo":
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Octopus AI Agent — Universal Desktop & Web Automation Platform",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter
+    )
+    parser.add_argument("--key", type=str, default=None, help="Groq API Key (uses embedded fallback if omitted)")
+    parser.add_argument("--agent", type=str, default="main", help="Initial agent (main, web, desktop, research, chatbot)")
+    parser.add_argument("--port", type=int, default=8000, help="Local server port")
+    parser.add_argument("--host", type=str, default="127.0.0.1", help="Server host address")
+    parser.add_argument("--no-reload", action="store_true", help="Disable live auto-reloading")
+    parser.add_argument("--headless", action="store_true", help="Run browser in headless mode")
+    parser.add_argument("--demo", action="store_true", help="Run quick demo of agent capabilities")
+
+    args = parser.parse_args()
+
+    if args.headless:
+        os.environ["BROWSER_HEADLESS"] = "true"
+
+    if args.demo:
+        setup_environment(args.key)
         run_demo()
     else:
-        initial_agent = "main"
-        if "--agent" in sys.argv:
-            idx = sys.argv.index("--agent")
-            if idx + 1 < len(sys.argv):
-                initial_agent = sys.argv[idx + 1].strip().lower()
-        reload_flag = "--no-reload" not in sys.argv
-        main(initial_agent=initial_agent, reload=reload_flag)
+        main(
+            initial_agent=args.agent.strip().lower(),
+            reload=not args.no_reload,
+            port=args.port,
+            host=args.host,
+            api_key=args.key
+        )

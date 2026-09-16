@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Dict, Any, Optional, List
 
 from fastapi import FastAPI, BackgroundTasks, HTTPException, Request, UploadFile, File
-from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
+from fastapi.responses import HTMLResponse, FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -178,6 +178,14 @@ AVAILABLE_AGENTS = [
         "description": "Student tutoring, teacher advisory, and educational Q&A",
         "placeholder": "Ask any question, discuss concepts, or brainstorm lesson plans...",
         "greeting": "Chatbot Agent ready. How can I help with your studies or teaching today?"
+    },
+    {
+        "id": "computer",
+        "name": "Computer Use",
+        "icon": "🖥️",
+        "description": "Autonomous Windows 11 control: UI Automation, Apps, Mouse/Keyboard, Shell, Pointing",
+        "placeholder": "Enter desktop goal (e.g. 'Open Notepad, type meeting notes', or 'Highlight search bar')...",
+        "greeting": "Computer Use Agent active. Full Windows control, UI automation, and companion pointing ready."
     }
 ]
 
@@ -199,6 +207,8 @@ def classify_intent(user_msg: str, current_agent: str = "main") -> str:
         return "research"
     if any(w in msg_lower for w in ["/chat", "/chatbot", "chatbot agent", "switch to chatbot"]):
         return "chatbot"
+    if any(w in msg_lower for w in ["/computer", "computer agent", "switch to computer", "computer use"]):
+        return "computer"
     if any(w in msg_lower for w in ["/main", "/orchestrator", "main agent", "switch to main"]):
         return "main"
 
@@ -903,14 +913,18 @@ async def chat_endpoint(req: ChatRequest, background_tasks: BackgroundTasks):
         except Exception as res_err:
             response_text = f"Research agent notice: {res_err}"
 
-    elif active_agent == "chatbot":
-        # Conversational Q&A / Tutoring
+    elif active_agent == "computer":
+        # Autonomous Computer Use (Windows-Use + Clacky)
         try:
-            c_res = await chatbot_agent_instance.chat(user_msg)
-            response_text = c_res.get("response", "How can I help you today?")
-            triggered_action = {"agent": "chatbot", "chat": True}
-        except Exception:
-            response_text = await local_llm_instance.generate_response(user_msg)
+            from computer_use import computer_agent_instance
+            c_res = await computer_agent_instance.run_task(user_msg)
+            response_text = c_res.get("spoken_summary") or "Computer action finished."
+            logs = c_res.get("step_logs", [])
+            if logs:
+                summary_text = "\n".join(f"• Step {s['step']}: {s['description']} ({'OK' if s['success'] else 'Failed'})" for s in logs)
+            triggered_action = {"agent": "computer", "result": c_res}
+        except Exception as cu_err:
+            response_text = f"Computer agent notice: {cu_err}"
 
     else:
         # Main Agent Orchestrator & Conversational AI
@@ -918,7 +932,10 @@ async def chat_endpoint(req: ChatRequest, background_tasks: BackgroundTasks):
             "whatsapp", "canva", "instagram", "broadcast", 
             "ptm", "find file", "local file", "organize file", 
             "move file", "touch file", "open canva", "open whatsapp", "open instagram",
-            "search google", "presentation deck", "create presentation"
+            "search google", "presentation deck", "create presentation",
+            "notepad", "calculator", "calc", "click", "type", "open app", "launch app",
+            "powershell", "terminal", "switch to", "bring to front", "screen", "highlight",
+            "pointer", "mouse", "windows", "close app", "shortcut", "press", "inspect ui"
         ])
 
         if is_actionable:
@@ -956,84 +973,13 @@ async def chat_endpoint(req: ChatRequest, background_tasks: BackgroundTasks):
 
 
 # =============================================================================
-# PERSISTENT 3D VRM DIGITAL HUMAN & MOTION APIS
+# STUDIO VIDEO AVATAR CONFIGURATION
 # =============================================================================
-class AvatarModeRequest(BaseModel):
-    mode: str  # "3d_vrm" or "video"
-
-
 @app.get("/api/avatar/mode")
 async def get_avatar_mode():
-    """Return the active avatar display mode ('3d_vrm' or 'video')."""
-    try:
-        from octopus_ai.memory.persistent_memory import persistent_memory_instance
-        mode = persistent_memory_instance.retrieve_variable("avatar_mode", "3d_vrm")
-    except Exception:
-        mode = "3d_vrm"
-    return {"mode": mode, "available_modes": ["3d_vrm", "video"]}
+    """Return avatar mode (Studio Video)."""
+    return {"mode": "video", "available_modes": ["video"]}
 
-
-@app.post("/api/avatar/mode")
-async def set_avatar_mode(req: AvatarModeRequest):
-    """Update preferred avatar mode ('3d_vrm' or 'video')."""
-    mode = req.mode.strip().lower()
-    if mode not in ["3d_vrm", "video"]:
-        raise HTTPException(status_code=400, detail="Mode must be '3d_vrm' or 'video'")
-    try:
-        from octopus_ai.memory.persistent_memory import persistent_memory_instance
-        persistent_memory_instance.store_variable("avatar_mode", mode)
-    except Exception:
-        pass
-    return {"success": True, "mode": mode}
-
-
-@app.get("/api/avatar/motion-profile")
-async def get_avatar_motion_profile():
-    """Return Dhanush's studio video-derived procedural motion profile."""
-    profile_path = repo_dir / "assets" / "avatars" / "dhanush_motion_profile.json"
-    if profile_path.exists():
-        with open(profile_path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    # Generate default profile on the fly if missing
-    try:
-        from octopus_ai.tools.avatar_motion_extractor import generate_dhanush_motion_profile
-        return generate_dhanush_motion_profile()
-    except Exception as e:
-        return {"error": str(e)}
-
-
-@app.get("/api/avatar/models")
-async def list_avatar_models():
-    """List available VRM models in the assets/avatars directory."""
-    avatars_dir = repo_dir / "assets" / "avatars"
-    models = []
-    if avatars_dir.exists():
-        for f in avatars_dir.glob("*.vrm"):
-            models.append({
-                "name": f.name,
-                "url": f"/assets/avatars/{f.name}",
-                "size_mb": round(f.stat().st_size / (1024 * 1024), 2)
-            })
-    return {"models": models, "has_models": len(models) > 0}
-
-
-@app.post("/api/avatar/upload-vrm")
-async def upload_vrm_avatar(file: UploadFile = File(...)):
-    """Upload and save a canonical Dhanush.vrm model into assets/avatars/."""
-    if not file.filename.lower().endswith(".vrm"):
-        raise HTTPException(status_code=400, detail="Only .vrm files are supported")
-    avatars_dir = repo_dir / "assets" / "avatars"
-    avatars_dir.mkdir(parents=True, exist_ok=True)
-    target_path = avatars_dir / file.filename
-    content = await file.read()
-    with open(target_path, "wb") as f:
-        f.write(content)
-    return {
-        "success": True,
-        "filename": file.filename,
-        "url": f"/assets/avatars/{file.filename}",
-        "message": f"Saved '{file.filename}' to assets/avatars/"
-    }
 
 
 # Background tasks that launch the real Chrome browser:
@@ -1087,3 +1033,106 @@ async def run_web_task(query: str):
         from octopus_ai.automations.web.browser_task import BrowserTaskAutomation
         auto = BrowserTaskAutomation(driver=eng.get_driver())
         await auto.run({"query": query})
+
+
+# =============================================================================
+# PACIFIC COMPUTER USE APIS (Windows-Use + Clacky Integration)
+# =============================================================================
+
+class ComputerExecuteRequest(BaseModel):
+    task: Optional[str] = None
+    tool: Optional[str] = None
+    params: Optional[Dict[str, Any]] = None
+
+
+class ComputerConfirmRequest(BaseModel):
+    confirmation_id: str
+    approved: bool
+
+
+@app.post("/api/computer/execute")
+async def api_computer_execute(req: ComputerExecuteRequest):
+    """Execute a multi-step task or an atomic computer-use tool."""
+    from computer_use import computer_agent_instance
+    if req.tool:
+        res = computer_agent_instance.execute_action(req.tool, req.params or {})
+        return res.to_dict()
+    elif req.task:
+        return await computer_agent_instance.run_task(req.task)
+    raise HTTPException(status_code=400, detail="Must provide 'task' or 'tool'")
+
+
+@app.get("/api/computer/observe")
+async def api_computer_observe(include_elements: bool = True):
+    """Capture live observation of active window, open windows, and accessibility tree."""
+    from computer_use import computer_agent_instance
+    obs = computer_agent_instance.observe(include_elements=include_elements)
+    return obs.to_dict(include_elements=include_elements)
+
+
+@app.get("/api/computer/status")
+async def api_computer_status():
+    """Get active computer task, emergency stop status, and execution history."""
+    from computer_use.bridge import bridge_client
+    return bridge_client.get_status()
+
+
+@app.post("/api/computer/stop")
+async def api_computer_stop():
+    """Trigger emergency stop (ESC) immediately halting all computer use activity."""
+    from computer_use.bridge import bridge_client
+    return bridge_client.emergency_stop("API / UI Emergency Stop")
+
+
+@app.post("/api/computer/reset")
+async def api_computer_reset():
+    """Reset abort state to allow new computer tasks."""
+    from computer_use.bridge import bridge_client
+    return bridge_client.reset_state()
+
+
+@app.post("/api/computer/confirm")
+async def api_computer_confirm(req: ComputerConfirmRequest):
+    """Approve or reject an action requiring user confirmation."""
+    from computer_use import policy_engine
+    act = policy_engine.resolve_confirmation(req.confirmation_id, req.approved)
+    if act:
+        from computer_use import computer_router
+        res = computer_router.execute(act)
+        return {"confirmed": True, "result": res.to_dict()}
+    return {"confirmed": False, "message": "Confirmation not found or rejected"}
+
+
+@app.get("/api/computer/routines")
+async def api_computer_routines():
+    """List saved Clacky automation routines."""
+    from computer_use import clacky_adapter
+    return {"routines": clacky_adapter.list_routines()}
+
+
+@app.get("/api/computer/events")
+async def api_computer_events(request: Request):
+    """Server-Sent Events (SSE) streaming real-time computer events, visual pointing, and status."""
+    from computer_use.events import event_bus
+
+    async def event_generator():
+        queue = asyncio.Queue()
+
+        def on_event(evt):
+            try:
+                queue.put_nowait(evt)
+            except Exception:
+                pass
+
+        event_bus.subscribe(None, on_event)
+        try:
+            while not await request.is_disconnected():
+                try:
+                    evt = await asyncio.wait_for(queue.get(), timeout=1.0)
+                    yield f"data: {json.dumps(evt.to_dict())}\n\n"
+                except asyncio.TimeoutError:
+                    yield ": keepalive\n\n"
+        finally:
+            event_bus.unsubscribe(None, on_event)
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")

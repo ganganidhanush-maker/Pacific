@@ -53,6 +53,7 @@ from .engine.selenium_engine import BrowserEngine
 from .memory.context import Memory
 from .safety.permissions import SafetyLayer, PermissionLevel, ActionCategory
 from .interface.chat import ChatInterface, WebChatInterface
+from .computer_use import ComputerAgent, computer_agent_instance, computer_router
 
 __all__ = [
     "OctopusSystem",
@@ -72,5 +73,8 @@ __all__ = [
     "ActionCategory",
     "ChatInterface",
     "WebChatInterface",
+    "ComputerAgent",
+    "computer_agent_instance",
+    "computer_router",
 ]
-__version__ = "0.1.0"
+__version__ = "0.2.0"

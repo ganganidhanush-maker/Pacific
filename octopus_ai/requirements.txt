@@ -29,3 +29,9 @@ openai>=1.0.0
 
 # System Metrics & Process Management
 psutil>=5.9.0
+
+# Windows Computer-Use & Accessibility Automation
+pywin32>=306; platform_system == "Windows"
+comtypes>=1.4.0; platform_system == "Windows"
+pyautogui>=0.9.54
+keyboard>=0.13.5
