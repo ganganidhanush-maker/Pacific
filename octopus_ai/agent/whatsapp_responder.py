@@ -8,7 +8,7 @@ and automatically generates and sends contextual replies using Groq LLM.
 import time
 import asyncio
 import logging
-from typing import Optional, Dict, Any, Set
+from typing import Optional, Dict, Any, Set, List
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
@@ -428,12 +428,12 @@ class WhatsAppAutoResponder:
                     }
                 }
                 
-                // 2. Identify the status of the VERY LAST actual message row
-                let lastMsg = null;
-                let lastDataId = "";
+                // 2. Scan backwards from the newest message to collect consecutive incoming messages (burst)
+                // until we hit our own outgoing message or the start of recent history.
+                const incomingBurst = [];
                 let isOutgoing = false;
-                let isIncoming = false;
-                
+                let lastDataId = "";
+
                 for (let i = rows.length - 1; i >= 0; i--) {
                     const row = rows[i];
                     const cls = (row.className || "") + " " + (row.parentElement ? row.parentElement.className || "" : "");
@@ -450,48 +450,67 @@ class WhatsAppAutoResponder:
                     const prePlainText = copyable ? (copyable.getAttribute("data-pre-plain-text") || "") : "";
                     const isPrePlainOut = prePlainText.includes("You:") || prePlainText.includes("You :") || prePlainText.toLowerCase().includes(userName.toLowerCase() + ":");
                     
+                    const isOut = isDataIdOut || hasChecks || hasOutCls || isPrePlainOut;
+                    
+                    if (isOut) {
+                        if (incomingBurst.length === 0) {
+                            isOutgoing = true;
+                            lastDataId = dataId;
+                        }
+                        break;
+                    }
+                    
                     const hasInCls = cls.includes("message-in") || !!row.querySelector("[class*='message-in']");
                     const isDataIdIn = dataId.startsWith("false_");
                     const isPrePlainIn = prePlainText.length > 0 && !isPrePlainOut;
+                    const isIn = (isDataIdIn || hasInCls || isPrePlainIn) && !hasChecks;
                     
-                    // Outgoing check (Checkmarks, true_, message-out, or You in pre-plain-text)
-                    if (isDataIdOut || hasChecks || hasOutCls || isPrePlainOut) {
-                        isOutgoing = true;
-                        lastMsg = row;
-                        lastDataId = dataId;
-                        break;
-                    }
-                    
-                    // Definite Incoming check (Must NOT have outgoing checkmarks)
-                    if ((isDataIdIn || hasInCls || isPrePlainIn) && !hasChecks) {
-                        isIncoming = true;
-                        lastMsg = row;
-                        lastDataId = dataId;
-                        break;
-                    }
-                    
-                    // Fallback for unclassified message: NEVER default to incoming!
-                    // Defaulting to outgoing prevents self-chatting infinite loops.
-                    const tEl = row.querySelector(".selectable-text, .copyable-text, [dir='ltr'], [dir='rtl'], [dir='auto']");
-                    if (tEl && tEl.textContent.trim()) {
-                        isOutgoing = true;
-                        lastMsg = row;
-                        lastDataId = dataId;
+                    if (isIn) {
+                        const rowText = extractRowText(row);
+                        if (rowText) {
+                            let senderName = activeContact;
+                            if (prePlainText) {
+                                const match = prePlainText.match(/\\]\\s*([^:]+):/);
+                                if (match && match[1]) senderName = match[1].trim();
+                            }
+                            incomingBurst.unshift({
+                                text: rowText,
+                                data_id: dataId,
+                                sender: senderName
+                            });
+                        }
+                    } else {
+                        // Unclassified message: treat as outgoing to prevent infinite loop
+                        if (incomingBurst.length === 0) {
+                            isOutgoing = true;
+                            lastDataId = dataId;
+                        }
                         break;
                     }
                 }
                 
-                if (!lastMsg) return null;
-                if (isOutgoing) {
-                    return { is_outgoing: true, is_incoming: false, data_id: lastDataId, recent_history: recentHistory };
+                if (incomingBurst.length === 0) {
+                    if (isOutgoing) {
+                        return { is_outgoing: true, is_incoming: false, data_id: lastDataId, recent_history: recentHistory };
+                    }
+                    return null;
                 }
                 
-                const finalText = extractRowText(lastMsg);
+                // Construct composite burst representation
+                const burstTexts = incomingBurst.map(b => b.text);
+                const burstDataIds = incomingBurst.map(b => b.data_id).filter(Boolean);
+                const lastIncoming = incomingBurst[incomingBurst.length - 1];
+                const compositeText = burstTexts.join("\n");
+                
                 return {
                     is_outgoing: false,
                     is_incoming: true,
-                    data_id: lastDataId,
-                    text: finalText,
+                    is_burst: incomingBurst.length > 1,
+                    burst_messages: burstTexts,
+                    burst_data_ids: burstDataIds,
+                    data_id: lastIncoming.data_id || "",
+                    sender: lastIncoming.sender || activeContact,
+                    text: compositeText,
                     recent_history: recentHistory
                 };
             })();
@@ -526,9 +545,25 @@ class WhatsAppAutoResponder:
                 
                 text = js_res.get("text", "").strip()
                 data_id = js_res.get("data_id", "")
+                is_burst = js_res.get("is_burst", False)
+                burst_messages = js_res.get("burst_messages", [text])
+                burst_data_ids = js_res.get("burst_data_ids", [data_id] if data_id else [])
+                sender = js_res.get("sender", contact)
                 
                 if not text:
                     return None
+                
+                # Group chat selective filtering
+                if self.is_group_chat():
+                    if not self.allow_group_replies:
+                        return None
+                    if not self.should_reply_to_group_message(contact, text, sender=sender, recent_history=js_res.get("recent_history")):
+                        fingerprint = f"{contact}::{text}"
+                        self.replied_fingerprints.add(fingerprint)
+                        for b_id in burst_data_ids:
+                            if b_id:
+                                self.replied_fingerprints.add(f"{contact}::{b_id}")
+                        return None
                 
                 # WhatsApp Web text deduplication safeguard
                 if len(text) > 4 and len(text) % 2 == 0:
@@ -555,12 +590,19 @@ class WhatsAppAutoResponder:
                 
                 if fingerprint in self.replied_fingerprints:
                     return None
+                for b_id in burst_data_ids:
+                    if b_id and f"{contact}::{b_id}" in self.replied_fingerprints and not is_burst:
+                        return None
                 
                 return {
                     "contact": contact,
                     "text": text,
                     "fingerprint": fingerprint,
                     "data_id": data_id,
+                    "is_burst": is_burst,
+                    "burst_messages": burst_messages,
+                    "burst_data_ids": burst_data_ids,
+                    "sender": sender,
                     "recent_history": js_res.get("recent_history", [])
                 }
             
@@ -641,6 +683,70 @@ class WhatsAppAutoResponder:
             logger.debug(f"Error inspecting latest message: {e}")
             return None
 
+    def should_reply_to_group_message(
+        self,
+        contact: str,
+        message_text: str,
+        sender: Optional[str] = None,
+        recent_history: Optional[List[Dict[str, Any]]] = None
+    ) -> bool:
+        """
+        Intelligent gating for WhatsApp Group chats:
+        Ignores low-value chatter, generic reactions, announcements,
+        or messages clearly addressed to other members.
+        """
+        msg_lower = message_text.lower().strip()
+
+        # 1. Automated/broadcast messages
+        if self.is_automated_or_broadcast(contact, message_text):
+            return False
+
+        # 2. Low-entropy reactions, single-word chatter, emojis
+        low_entropy = {
+            "ok", "k", "okay", "kk", "hmmm", "hmm", "hm", "lol", "lmao", "rofl",
+            "haha", "hahaha", "cool", "nice", "great", "fine", "done", "yes", "no",
+            "yeah", "yep", "nope", "sare", "avunu", "ayyo", "super", "gm", "gn",
+            "good morning", "good night", "tq", "thanks", "thank you", "welcome",
+            "+1", "congrats", "congratulations", "happy birthday", "hbd"
+        }
+        if msg_lower in low_entropy or len(msg_lower) <= 2:
+            logger.info(f"Group filter: skipping low-entropy reaction '{message_text}' in '{contact}'")
+            return False
+
+        # Drop messages with no alphanumeric characters (pure emojis)
+        cleaned_chars = [c for c in msg_lower if c.isalnum()]
+        if len(cleaned_chars) == 0:
+            return False
+
+        # 3. Explicitly addressed to another person (e.g. '@Someone', 'Ramesh bro', 'Rahul:')
+        user_aliases = ["dhanush", "dhanu", "gangani", "saiteja", "pacifica"]
+        if "@" in msg_lower:
+            has_self_mention = any(alias in msg_lower for alias in user_aliases)
+            if not has_self_mention:
+                logger.info(f"Group filter: message addressed to someone else ('{message_text}')")
+                return False
+
+        # Check if message starts with another member's name followed by punctuation
+        # e.g., "Kiran, did you submit?" or "Ajay: check this"
+        first_word = msg_lower.split()[0].rstrip(",:;-")
+        if first_word not in user_aliases and any(msg_lower.startswith(f"{first_word}{sep}") for sep in [",", ":", " -"]):
+            return False
+
+        # 4. If Dhanush is explicitly tagged or mentioned, definitely reply!
+        if any(alias in msg_lower for alias in user_aliases):
+            return True
+
+        # 5. For general group chatter: only reply if it's an open substantive question
+        is_question = "?" in message_text or any(msg_lower.startswith(q) for q in [
+            "who", "what", "where", "when", "why", "how", "anyone", "anybody", "can someone", "does anyone"
+        ])
+        if is_question and len(message_text.split()) >= 3:
+            return True
+
+        # By default in group chats, stay quiet on incidental chatter
+        logger.info(f"Group filter: staying silent on incidental group chatter in '{contact}'")
+        return False
+
     def is_automated_or_broadcast(self, contact: str, message: str) -> bool:
         """
         Determine if a message is an automated broadcast, commercial alert, OTP, or announcement
@@ -677,12 +783,14 @@ class WhatsAppAutoResponder:
         self, 
         contact: str, 
         message_text: str, 
-        recent_history: Optional[List[Dict[str, Any]]] = None
+        recent_history: Optional[List[Dict[str, Any]]] = None,
+        burst_messages: Optional[List[str]] = None
     ) -> str:
         """
         Use Groq LLM to generate a natural, human reply representing Dhanush.
         Authentically matches the sender's slang and language (Telugu/Hinglish/English),
         and responds directly to context in 3-10 words.
+        If a multi-message burst was sent, synthesizes ONE cohesive reply.
         """
         human_system_prompt = (
             f"You are {self.user_name}, a friendly, chill young Indian college student and developer chatting with friends on WhatsApp.\n"
@@ -713,15 +821,26 @@ class WhatsAppAutoResponder:
                 txt = item.get("text", "")
                 if txt:
                     history_lines.append(f"{sender}: {txt}")
+
+        burst_note = ""
+        if burst_messages and len(burst_messages) > 1:
+            burst_list = "\n".join(f"• \"{m}\"" for m in burst_messages)
+            burst_note = f"\nNote: {contact} sent multiple messages in rapid succession (burst):\n{burst_list}\n"
         
         if history_lines:
             conv_context = "\n".join(history_lines)
             user_prompt = (
-                f"Recent conversation:\n{conv_context}\n\n"
-                f"Incoming message from {contact} to reply to: \"{message_text}\""
+                f"Recent conversation:\n{conv_context}\n"
+                f"{burst_note}\n"
+                f"Incoming message(s) from {contact} to reply to: \"{message_text}\"\n"
+                f"Provide ONE single cohesive natural reply addressing their complete thought."
             )
         else:
-            user_prompt = f"Incoming WhatsApp message from {contact}: \"{message_text}\""
+            user_prompt = (
+                f"{burst_note}\n"
+                f"Incoming WhatsApp message(s) from {contact}: \"{message_text}\"\n"
+                f"Provide ONE single cohesive natural reply addressing their complete thought."
+            )
         
         try:
             resp = self.llm.chat(
@@ -919,6 +1038,16 @@ class WhatsAppAutoResponder:
             
             if not msg_info:
                 return None
+
+            contact = msg_info["contact"]
+
+            # Typing debounce: If contact is typing, wait 2.0s to let them finish sending their burst sequence
+            if self.is_contact_typing():
+                logger.info(f"Contact '{contact}' is typing. Waiting 2.0s for multi-message burst completion...")
+                time.sleep(2.0)
+                newer_info = self.get_latest_message_info()
+                if newer_info:
+                    msg_info = newer_info
             
             # We received an incoming message! Reset activity timestamp immediately
             self.last_activity_timestamp = time.time()
@@ -927,23 +1056,42 @@ class WhatsAppAutoResponder:
             incoming_text = msg_info["text"]
             fingerprint = msg_info["fingerprint"]
             recent_history = msg_info.get("recent_history", [])
+            is_burst = msg_info.get("is_burst", False)
+            burst_messages = msg_info.get("burst_messages", [incoming_text])
+            burst_data_ids = msg_info.get("burst_data_ids", [])
             
             # 3. Filter only obvious commercial marketing/OTP broadcasts
             if self.is_automated_or_broadcast(contact, incoming_text):
                 self.replied_fingerprints.add(fingerprint)
+                for b_id in burst_data_ids:
+                    if b_id:
+                        self.replied_fingerprints.add(f"{contact}::{b_id}")
                 print(f"ℹ️ [Skipped] Message from \"{contact}\" is an automated broadcast/promotional alert. No reply needed.")
                 return None
 
             print("\n" + "─" * 60)
-            print(f"📩 [New Message] from: {contact}")
-            print(f"💬 Message: \"{incoming_text}\"")
+            if is_burst and len(burst_messages) > 1:
+                print(f"📩 [Multi-Message Burst ({len(burst_messages)})] from: {contact}")
+                for idx, b_m in enumerate(burst_messages, 1):
+                    print(f"   {idx}. \"{b_m}\"")
+            else:
+                print(f"📩 [New Message] from: {contact}")
+                print(f"💬 Message: \"{incoming_text}\"")
             print(f"👤 Generating reply as {self.user_name} via Groq...")
             
-            # 4. Generate AI reply using full recent conversation context
-            ai_reply = self.generate_ai_reply(contact, incoming_text, recent_history=recent_history)
+            # 4. Generate AI reply using full recent conversation context and burst sequence
+            ai_reply = self.generate_ai_reply(
+                contact, 
+                incoming_text, 
+                recent_history=recent_history,
+                burst_messages=burst_messages
+            )
             
             if ai_reply == "IGNORE":
                 self.replied_fingerprints.add(fingerprint)
+                for b_id in burst_data_ids:
+                    if b_id:
+                        self.replied_fingerprints.add(f"{contact}::{b_id}")
                 print(f"ℹ️ [Ignored] Message flagged as not requiring reply.")
                 print("─" * 60 + "\n")
                 return None
@@ -956,8 +1104,13 @@ class WhatsAppAutoResponder:
             # Update activity timestamp upon sending reply
             self.last_activity_timestamp = time.time()
             
-            # ALWAYS record fingerprint and sent reply history to prevent repeated loops
+            # ALWAYS record fingerprint, burst data IDs, and burst texts to prevent repeated loops
             self.replied_fingerprints.add(fingerprint)
+            for b_id in burst_data_ids:
+                if b_id:
+                    self.replied_fingerprints.add(f"{contact}::{b_id}")
+            for b_msg in burst_messages:
+                self.replied_fingerprints.add(f"{contact}::{b_msg}")
             self.sent_replies_history.add(ai_reply.strip().lower())
             if len(self.sent_replies_history) > 100:
                 self.sent_replies_history.pop()

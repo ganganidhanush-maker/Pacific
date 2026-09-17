@@ -194,7 +194,8 @@ AVAILABLE_AGENTS = [
 def classify_intent(user_msg: str, current_agent: str = "main") -> str:
     """
     Intelligent Intent Classifier:
-    Detects target agent from natural language keywords and commands.
+    Accurately distinguishes between conversational chatter/questions and
+    concrete imperative automation commands.
     """
     msg_lower = user_msg.lower().strip()
 
@@ -212,46 +213,71 @@ def classify_intent(user_msg: str, current_agent: str = "main") -> str:
     if any(w in msg_lower for w in ["/main", "/orchestrator", "main agent", "switch to main"]):
         return "main"
 
-    # 2. Desktop actions: Calculator, Notepad, assignment, Paint, Task Manager, file commands
-    desktop_triggers = [
+    # 1.5 Conversational & Question Filter:
+    # If user is asking a question or talking casually, do NOT falsely route to automation agents
+    is_conversational = (
+        msg_lower.endswith("?") or
+        any(msg_lower.startswith(q) for q in [
+            "why", "how", "what", "who", "where", "when", "can you tell", "can you explain",
+            "explain", "tell me", "is it", "are you", "do you", "why did", "why is",
+            "why does", "what is", "how do", "how does", "what are", "who is"
+        ]) or
+        any(w in msg_lower for w in [
+            "chating", "chatting", "speaking", "talking", "sending terminal", "commands not the user",
+            "instead of speaking", "don't reply", "dont reply", "group chat", "multi message",
+            "patterns", "tell a joke", "who are you", "what's up", "whats up", "how are you",
+            "good morning", "good evening", "hi bro", "hey bro", "ela unnav", "cheppu bro"
+        ])
+    )
+    if is_conversational and current_agent in ["main", "chatbot"]:
+        return current_agent
+
+    # 2. Desktop actions: Require explicit action verbs or composite imperative commands
+    desktop_action_verbs = [
+        "open", "launch", "start", "run", "take", "capture", "snip",
+        "find", "search", "organize", "move", "touch", "lock", "mute", "unmute", "write"
+    ]
+    desktop_targets = [
         "calculator", "calc", "notepad", "assignment", "paint", "mspaint",
         "task manager", "taskmgr", "command prompt", "powershell", "terminal",
-        "file explorer", "explorer", "find file", "search file", "organize file",
-        "move file", "touch file", "local file", "open new notepad", "write the python assignment",
-        "python assignment", "system info", "tasklist", "pdf", "documents", "downloads",
-        "screenshot", "screen capture", "capture screen", "snip", "battery",
-        "mute", "unmute", "volume", "lock screen", "lock computer", "lock workstation",
-        "lock pc", "lock windows", "camera", "settings"
+        "file explorer", "explorer", "local file", "python assignment", "system info",
+        "screenshot", "screen capture", "capture screen", "volume", "lock screen", "lock workstation",
+        "lock pc", "camera", "settings"
     ]
-    if (any(k in msg_lower for k in desktop_triggers) or
-        ("find" in msg_lower and ("file" in msg_lower or "doc" in msg_lower or "pdf" in msg_lower)) or
-        ("search" in msg_lower and ("file" in msg_lower or "doc" in msg_lower or "pdf" in msg_lower))):
+    has_desktop_action = any(
+        target in msg_lower and any(verb in msg_lower for verb in desktop_action_verbs)
+        for target in desktop_targets
+    ) or any(k in msg_lower for k in [
+        "open notepad", "open new notepad", "open calculator", "launch calculator",
+        "open paint", "take screenshot", "lock workstation", "lock pc", "lock windows",
+        "mute volume", "unmute volume", "toggle mute", "write python assignment",
+        "find file", "search file", "organize file", "move file", "touch file",
+        "launch calculator app"
+    ])
+    if has_desktop_action and not is_conversational:
         return "desktop"
 
-
-    # 3. Web actions: WhatsApp, Canva, Instagram, Google, browser
-    web_triggers = [
-        "whatsapp", "canva", "instagram", "send message to", "message to",
-        "search google", "google search", "browse to", "open url", "youtube",
-        "open browser", "open chrome", "launch chrome", "broadcast", "ptm",
-        "open whatsapp", "open canva", "open instagram",
-        "activate whatsapp", "start whatsapp", "auto responder", "auto chat",
-        "deactivate whatsapp", "stop whatsapp"
+    # 3. Web actions: WhatsApp, Canva, Instagram, Google search
+    web_actions = [
+        "open whatsapp", "open canva", "open instagram", "activate whatsapp",
+        "start whatsapp", "auto responder", "auto chat", "deactivate whatsapp",
+        "stop whatsapp", "send whatsapp", "send message to", "message to",
+        "create presentation", "presentation deck", "search google", "browse to"
     ]
-    if any(k in msg_lower for k in web_triggers):
+    if any(k in msg_lower for k in web_actions) and not is_conversational:
         return "web"
 
     # 4. Research actions: slide outline, literature, study research
     research_triggers = [
-        "research", "slide outline", "presentation outline", "synthesize topic",
-        "syllabus", "academic research", "literature"
+        "presentation outline", "slide outline", "synthesize topic",
+        "academic research outline", "syllabus research", "research paper"
     ]
-    if any(k in msg_lower for k in research_triggers):
+    if any(k in msg_lower for k in research_triggers) and not is_conversational:
         return "research"
 
     # 5. Chatbot actions
     chatbot_triggers = [
-        "explain", "teach me", "tutor", "quiz me", "lesson plan"
+        "explain", "teach me", "tutor", "quiz me", "lesson plan", "help with studies"
     ]
     if any(k in msg_lower for k in chatbot_triggers) and current_agent == "chatbot":
         return "chatbot"
@@ -551,11 +577,18 @@ async def startup_event():
         print(f"OctopusAgent init note: {e}")
     registry_instance = create_default_registry()
 
-    # Pre-generate greeting audios for instantaneous switching
-    async def _precache():
+    # Pre-warm VoiceService (Chatterbox on GPU) and pre-generate greeting audios
+    async def _prewarm_voice_and_cache():
+        try:
+            from server.voice_service import voice_service_instance
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(None, voice_service_instance.initialize)
+        except Exception as e:
+            print(f"[VoicePrewarm] Notice: {e}")
+
         for ag in AVAILABLE_AGENTS:
             await generate_speech_file(ag["greeting"])
-    asyncio.create_task(_precache())
+    asyncio.create_task(_prewarm_voice_and_cache())
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -913,6 +946,19 @@ async def chat_endpoint(req: ChatRequest, background_tasks: BackgroundTasks):
         except Exception as res_err:
             response_text = f"Research agent notice: {res_err}"
 
+    elif active_agent == "chatbot":
+        # Conversational Chatbot Agent (Dhanush Persona)
+        try:
+            from agent.subagents.chatbot_agent import chatbot_agent_instance
+            c_res = await chatbot_agent_instance.chat(user_msg)
+            response_text = c_res.get("response") or "Hey! How can I help you today?"
+            response_text = sanitize_speech_response(response_text)
+            triggered_action = {"agent": "chatbot", "result": c_res}
+        except Exception as chat_err:
+            response_text = await local_llm_instance.generate_response(user_msg)
+            response_text = sanitize_speech_response(response_text)
+            triggered_action = {"agent": "chatbot", "fallback": True}
+
     elif active_agent == "computer":
         # Autonomous Computer Use (Windows-Use + Clacky)
         try:
@@ -928,15 +974,31 @@ async def chat_endpoint(req: ChatRequest, background_tasks: BackgroundTasks):
 
     else:
         # Main Agent Orchestrator & Conversational AI
-        is_actionable = any(kw in user_lower for kw in [
-            "whatsapp", "canva", "instagram", "broadcast", 
-            "ptm", "find file", "local file", "organize file", 
-            "move file", "touch file", "open canva", "open whatsapp", "open instagram",
-            "search google", "presentation deck", "create presentation",
-            "notepad", "calculator", "calc", "click", "type", "open app", "launch app",
-            "powershell", "terminal", "switch to", "bring to front", "screen", "highlight",
-            "pointer", "mouse", "windows", "close app", "shortcut", "press", "inspect ui"
-        ])
+        is_question_or_chat = (
+            user_lower.endswith("?") or
+            any(user_lower.startswith(q) for q in [
+                "why", "how", "what", "who", "where", "when", "can you tell", "can you explain",
+                "explain", "tell me", "is it", "are you", "do you", "why did", "why is",
+                "why does", "what is", "how do", "how does", "what are", "who is"
+            ]) or
+            any(w in user_lower for w in [
+                "chating", "chatting", "speaking", "talking", "sending terminal", "commands not the user",
+                "instead of speaking", "don't reply", "dont reply", "group chat", "multi message",
+                "tell a joke", "who are you", "what's up", "whats up", "how are you",
+                "good morning", "good evening", "hi bro", "hey bro", "ela unnav", "cheppu bro"
+            ])
+        )
+
+        is_actionable = False
+        if not is_question_or_chat:
+            is_actionable = any(kw in user_lower for kw in [
+                "open whatsapp", "send whatsapp", "whatsapp broadcast", "open canva", "open instagram",
+                "ptm update", "find file", "local file", "organize file", "move file", "touch file",
+                "search google", "presentation deck", "create presentation",
+                "open notepad", "open calculator", "open calc", "launch app", "open app",
+                "run powershell", "execute terminal", "take screenshot", "lock workstation", "lock pc",
+                "bring to front", "switch to", "inspect ui"
+            ])
 
         if is_actionable:
             try:

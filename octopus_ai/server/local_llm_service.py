@@ -220,14 +220,28 @@ class LocalLLMService:
                 messages.append({"role": "user", "content": cleaned_prompt})
 
                 def _call_groq():
-                    resp = groq.client.chat.completions.create(
-                        model=groq.model,
-                        messages=messages,
-                        temperature=0.7,
-                        max_tokens=800,
-                        top_p=0.95
-                    )
-                    return resp.choices[0].message.content
+                    try:
+                        resp = groq.client.chat.completions.create(
+                            model=groq.model,
+                            messages=messages,
+                            temperature=0.7,
+                            max_tokens=250,
+                            top_p=0.95
+                        )
+                        return resp.choices[0].message.content
+                    except Exception as first_err:
+                        # Auto-retry with compact token window if OTPM rate limit triggered
+                        if "429" in str(first_err) or "rate_limit" in str(first_err).lower():
+                            logger.info("[LocalLLM] Groq 429 OTPM limit hit, retrying with compact token window (120)...")
+                            resp = groq.client.chat.completions.create(
+                                model=groq.model,
+                                messages=messages,
+                                temperature=0.7,
+                                max_tokens=120,
+                                top_p=0.95
+                            )
+                            return resp.choices[0].message.content
+                        raise first_err
 
                 groq_reply = await loop.run_in_executor(None, _call_groq)
                 if groq_reply and groq_reply.strip():
@@ -237,47 +251,49 @@ class LocalLLMService:
         except Exception as groq_err:
             logger.info(f"[LocalLLM] Groq inference notice ({groq_err}), trying local Ollama...")
 
-        # 3. Local Ollama LLM with GPU acceleration
-        try:
-            is_ready = await loop.run_in_executor(None, self.ensure_server_running)
-            if is_ready:
-                messages = [{"role": "system", "content": sys_msg}]
-                if add_to_history:
-                    for msg in self.conversation_history[-self.max_history:]:
-                        messages.append(msg)
-                messages.append({"role": "user", "content": cleaned_prompt})
+        # 3. Local Ollama LLM with GPU acceleration (only if ollama is installed)
+        ollama_bin = self._find_ollama_executable()
+        if ollama_bin:
+            try:
+                is_ready = await loop.run_in_executor(None, self.ensure_server_running)
+                if is_ready:
+                    messages = [{"role": "system", "content": sys_msg}]
+                    if add_to_history:
+                        for msg in self.conversation_history[-self.max_history:]:
+                            messages.append(msg)
+                    messages.append({"role": "user", "content": cleaned_prompt})
 
-                payload = {
-                    "model": self.model,
-                    "messages": messages,
-                    "stream": False,
-                    "options": {
-                        "temperature": 0.7,
-                        "top_p": 0.9,
-                        "num_predict": 1024
+                    payload = {
+                        "model": self.model,
+                        "messages": messages,
+                        "stream": False,
+                        "options": {
+                            "temperature": 0.7,
+                            "top_p": 0.9,
+                            "num_predict": 512
+                        }
                     }
-                }
 
-                req_data = json.dumps(payload).encode("utf-8")
-                req = urllib.request.Request(
-                    f"{self.base_url}/api/chat",
-                    data=req_data,
-                    headers={"Content-Type": "application/json", "User-Agent": "OctopusAI"}
-                )
+                    req_data = json.dumps(payload).encode("utf-8")
+                    req = urllib.request.Request(
+                        f"{self.base_url}/api/chat",
+                        data=req_data,
+                        headers={"Content-Type": "application/json", "User-Agent": "OctopusAI"}
+                    )
 
-                def _call_ollama():
-                    with urllib.request.urlopen(req, timeout=30) as resp:
-                        return json.loads(resp.read().decode("utf-8"))
+                    def _call_ollama():
+                        with urllib.request.urlopen(req, timeout=5) as resp:
+                            return json.loads(resp.read().decode("utf-8"))
 
-                res_json = await loop.run_in_executor(None, _call_ollama)
-                reply = (res_json.get("message") or {}).get("content", "").strip()
+                    res_json = await loop.run_in_executor(None, _call_ollama)
+                    reply = (res_json.get("message") or {}).get("content", "").strip()
 
-                if reply:
-                    clean_reply = sanitize_speech_response(reply)
-                    self._record_turn(cleaned_prompt, clean_reply, add_to_history)
-                    return clean_reply
-        except Exception as ollama_err:
-            logger.error(f"[LocalLLM] Error querying Ollama: {ollama_err}")
+                    if reply:
+                        clean_reply = sanitize_speech_response(reply)
+                        self._record_turn(cleaned_prompt, clean_reply, add_to_history)
+                        return clean_reply
+            except Exception as ollama_err:
+                logger.error(f"[LocalLLM] Error querying Ollama: {ollama_err}")
 
         # 4. Graceful fallback
         fallback_reply = self._fallback_chat(cleaned_prompt)
@@ -363,12 +379,28 @@ def sanitize_speech_response(text: str) -> str:
     cleaned = re.sub(r'```[\s\S]*?```', '', cleaned)
     cleaned = re.sub(r'`[^`]*`', '', cleaned)
 
+    # Filter out terminal / PowerShell / shell command lines
+    filtered_lines = []
+    for line in cleaned.splitlines():
+        l_str = line.strip()
+        l_low = l_str.lower()
+        # Drop lines that are shell commands, prompt paths, or CLI executions
+        if (
+            l_low.startswith(("powershell", "cmd.exe", "get-", "set-", "invoke-", "start-", "stop-", "dir ", "ls ", "cd "))
+            or l_low.startswith(("& powershell", "$", ">", "ps c:", "c:\\", "sudo ", "pip install", "python -m"))
+            or re.match(r'^[a-zA-Z]:\\[^\n]*>', l_str)
+            or re.match(r'^(step\s*\d+:?\s*(run|execute)?\s*powershell)', l_low)
+        ):
+            continue
+        filtered_lines.append(line)
+    cleaned = "\n".join(filtered_lines).strip()
+
     # Clean markdown formatting characters while preserving all Unicode language scripts (Telugu, Hindi, etc.)
     cleaned = cleaned.replace("*", "").replace("#", "").replace("_", " ").replace(">", "")
     cleaned = re.sub(r'[ \t]+', ' ', cleaned).strip()
 
     if not cleaned or cleaned.startswith("{"):
-        return "I am ready. How can I help you today?"
+        return "I am here with you. How can I help you today?"
     return cleaned
 
 
