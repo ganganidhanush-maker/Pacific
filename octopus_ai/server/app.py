@@ -490,9 +490,14 @@ def start_whatsapp_auto_responder() -> tuple[bool, str]:
 
         from octopus_ai.agent.whatsapp_responder import WhatsAppAutoResponder
         if whatsapp_auto_responder_instance is None:
-            whatsapp_auto_responder_instance = WhatsAppAutoResponder(driver=driver, user_name="Dhanush")
+            whatsapp_auto_responder_instance = WhatsAppAutoResponder(
+                driver=driver, 
+                user_name="Dhanush",
+                allow_group_replies=True
+            )
         else:
             whatsapp_auto_responder_instance.set_driver(driver)
+            whatsapp_auto_responder_instance.allow_group_replies = True
 
         whatsapp_auto_responder_instance.is_running = True
 
@@ -738,12 +743,23 @@ async def auto_responder_status_endpoint():
         and whatsapp_auto_responder_thread is not None
         and whatsapp_auto_responder_thread.is_alive()
     )
-    return {
+    res = {
         "success": True,
         "is_running": is_running,
         "active_contact": getattr(whatsapp_auto_responder_instance, "active_chat_contact", None) if whatsapp_auto_responder_instance else None,
         "inactivity_limit_seconds": 25.0
     }
+    if whatsapp_auto_responder_instance:
+        res["fingerprints_count"] = len(whatsapp_auto_responder_instance.replied_fingerprints)
+        res["fingerprints"] = list(whatsapp_auto_responder_instance.replied_fingerprints)[-10:]
+        res["sent_history"] = list(whatsapp_auto_responder_instance.sent_replies_history)[-5:]
+        res["is_group"] = whatsapp_auto_responder_instance.is_group_chat()
+        res["allow_group"] = whatsapp_auto_responder_instance.allow_group_replies
+        try:
+            res["js_inspect"] = whatsapp_auto_responder_instance._inspect_conversation_js()
+        except Exception as e:
+            res["js_inspect_error"] = str(e)
+    return res
 
 
 @app.post("/api/agent/select")

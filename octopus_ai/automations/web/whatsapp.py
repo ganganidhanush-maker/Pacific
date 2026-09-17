@@ -134,10 +134,48 @@ class WhatsAppAutomation(BaseAutomation):
                     msg_boxes = self.driver.find_elements(By.XPATH, "//div[@contenteditable='true'][@data-tab='10'] | //footer//div[@contenteditable='true']")
                     if msg_boxes:
                         msg_box = msg_boxes[0]
-                        msg_box.click()
-                        msg_box.send_keys(message)
-                        time.sleep(0.5)
+                        try:
+                            msg_box.click()
+                        except Exception:
+                            self.driver.execute_script("arguments[0].focus();", msg_box)
+                        time.sleep(0.2)
+                        
+                        # Use document.execCommand for React/Lexical support
+                        self.driver.execute_script("""
+                            const box = arguments[0];
+                            const text = arguments[1];
+                            if (box) {
+                                box.focus();
+                                const sel = window.getSelection();
+                                const range = document.createRange();
+                                range.selectNodeContents(box);
+                                sel.removeAllRanges();
+                                sel.addRange(range);
+                                document.execCommand('insertText', false, text);
+                                box.dispatchEvent(new InputEvent('input', { bubbles: true, cancelable: true, inputType: 'insertText', data: text }));
+                            }
+                        """, msg_box, message)
+                        time.sleep(0.3)
+                        
+                        if not msg_box.text.strip():
+                            msg_box.send_keys(message)
+                            time.sleep(0.3)
+                        
                         msg_box.send_keys(Keys.ENTER)
+                        time.sleep(0.3)
+                        
+                        # Also click send button via JS if present
+                        self.driver.execute_script("""
+                            const footer = document.querySelector("#main footer") || document.querySelector("footer");
+                            if (footer) {
+                                const sendBtn = footer.querySelector("button[aria-label*='Send' i], [data-testid='send'], [data-icon*='send']");
+                                if (sendBtn) {
+                                    const target = sendBtn.closest('button') || sendBtn.closest("[role='button']") || sendBtn;
+                                    target.click();
+                                }
+                            }
+                        """)
+                        time.sleep(0.5)
                         self.emit_step(4, "Message Sent", f"Delivered to {target_name}", "done")
                         preview.finish_automation(True, f"Sent message to {target_name}")
                         return AutomationResult(

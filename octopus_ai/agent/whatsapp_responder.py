@@ -889,15 +889,21 @@ class WhatsAppAutoResponder:
     def send_reply(self, reply_text: str) -> bool:
         """
         Locate the message input box in WhatsApp Web, type the reply, and send it.
-        Uses native Selenium typing with Lexical React support and Enter key / Send button.
+        Uses a robust multi-strategy pipeline:
+        1. Native Selection + document.execCommand('insertText') + React InputEvent (primary)
+        2. Selenium native send_keys (fallback)
+        3. Synthetic Enter key events + Selenium Keys.ENTER
+        4. Send button pointer/mouse event sequence (mousedown, mouseup, click)
+        5. Delivery verification: verifies compose box is cleared
         """
         if not self.driver:
             return False
         
         selectors = [
             "#main footer div[contenteditable='true']",
-            "#main div[contenteditable='true'][role='textbox']",
             "div[data-testid='conversation-compose-box-input']",
+            "#main div[contenteditable='true'][data-tab='10']",
+            "#main div[contenteditable='true'][role='textbox']",
             "footer div[contenteditable='true']",
             "#main footer [role='textbox']",
             "div[aria-label*='Type a message' i]",
@@ -911,50 +917,146 @@ class WhatsAppAutoResponder:
                 try:
                     elems = self.driver.find_elements(By.CSS_SELECTOR, sel)
                     for el in elems:
-                        input_elem = el
-                        break
+                        if el.is_displayed():
+                            input_elem = el
+                            break
                     if input_elem:
                         break
                 except Exception:
                     continue
             if input_elem:
                 break
-            time.sleep(0.3)
+            time.sleep(0.25)
         
         if not input_elem:
             logger.warning("Could not locate WhatsApp message input box.")
             return False
         
         try:
-            # 1. Click and focus the input element
+            # 1. Focus compose box
             try:
                 input_elem.click()
             except Exception:
                 self.driver.execute_script("arguments[0].focus();", input_elem)
+            time.sleep(0.15)
+            
+            # 2. Type via JavaScript execCommand + React InputEvent
+            typed_js = self.driver.execute_script("""
+                const box = arguments[0];
+                const text = arguments[1];
+                if (!box) return false;
+                
+                try {
+                    box.focus();
+                    
+                    // Clear existing text if any
+                    const sel = window.getSelection();
+                    const range = document.createRange();
+                    range.selectNodeContents(box);
+                    sel.removeAllRanges();
+                    sel.addRange(range);
+                    
+                    // Use native execCommand to update Lexical / React internal AST
+                    const success = document.execCommand('insertText', false, text);
+                    
+                    // Dispatch modern React InputEvent
+                    const inputEvt = new InputEvent('input', {
+                        bubbles: true,
+                        cancelable: true,
+                        inputType: 'insertText',
+                        data: text
+                    });
+                    box.dispatchEvent(inputEvt);
+                    return true;
+                } catch(e) {
+                    return false;
+                }
+            """, input_elem, reply_text)
+            
             time.sleep(0.2)
             
-            # 2. Type via Selenium send_keys (proven to work with WhatsApp Lexical editor)
-            input_elem.send_keys(reply_text)
-            time.sleep(0.3)
+            # Check if text is present in the compose box; if not, use Selenium send_keys
+            curr_val = input_elem.text.strip()
+            if not curr_val:
+                try:
+                    input_elem.send_keys(reply_text)
+                    time.sleep(0.2)
+                except Exception:
+                    pass
             
-            # 3. Press ENTER to send
-            input_elem.send_keys(Keys.ENTER)
-            time.sleep(0.4)
+            # 3. Submit: Try multiple sending techniques
+            # Technique A: Synthetic Enter keyboard events on compose box
+            self.driver.execute_script("""
+                const box = arguments[0];
+                if (box) {
+                    const enterOpts = {
+                        key: 'Enter',
+                        code: 'Enter',
+                        keyCode: 13,
+                        which: 13,
+                        bubbles: true,
+                        cancelable: true,
+                        composed: true,
+                        view: window
+                    };
+                    box.dispatchEvent(new KeyboardEvent('keydown', enterOpts));
+                    box.dispatchEvent(new KeyboardEvent('keypress', enterOpts));
+                    box.dispatchEvent(new KeyboardEvent('keyup', enterOpts));
+                }
+            """, input_elem)
             
-            # 4. Also click send button via JS if still present
+            # Technique B: Selenium Keys.ENTER
+            try:
+                input_elem.send_keys(Keys.ENTER)
+            except Exception:
+                pass
+            time.sleep(0.25)
+            
+            # Technique C: Locate and click Send button via full synthetic pointer & mouse events
             self.driver.execute_script("""
                 const footer = document.querySelector("#main footer") || document.querySelector("footer");
                 if (footer) {
                     const sendBtn = footer.querySelector(
-                        "button[aria-label='Send'], button[data-testid='compose-btn-send'], span[data-icon='send'], span[data-icon*='send'], span[data-icon*='send-filled']"
+                        "button[aria-label*='Send' i], [data-testid='compose-btn-send'], [data-testid='send'], span[data-icon='send'], span[data-icon='send-filled'], span[data-icon*='send'], div[role='button'][aria-label*='Send' i]"
                     );
                     if (sendBtn) {
-                        const btn = sendBtn.tagName.toLowerCase() === 'button' ? sendBtn : sendBtn.closest('button');
-                        if (btn) btn.click();
+                        const target = sendBtn.closest('button') || sendBtn.closest("[role='button']") || sendBtn;
+                        const mouseOpts = { bubbles: true, cancelable: true, view: window, buttons: 1 };
+                        target.dispatchEvent(new PointerEvent('pointerdown', mouseOpts));
+                        target.dispatchEvent(new MouseEvent('mousedown', mouseOpts));
+                        target.dispatchEvent(new PointerEvent('pointerup', mouseOpts));
+                        target.dispatchEvent(new MouseEvent('mouseup', mouseOpts));
+                        target.dispatchEvent(new MouseEvent('click', mouseOpts));
+                        try { target.click(); } catch(e) {}
                     }
                 }
             """)
-            time.sleep(0.3)
+            time.sleep(0.35)
+            
+            # 4. Delivery Verification: Check if input box was cleared
+            is_cleared = bool(self.driver.execute_script("""
+                const box = arguments[0];
+                if (!box) return true;
+                const txt = (box.textContent || box.innerText || '').trim();
+                return txt.length === 0;
+            """, input_elem))
+            
+            if not is_cleared:
+                # Retry one more aggressive Enter + Send click
+                input_elem.send_keys(Keys.ENTER)
+                time.sleep(0.2)
+                self.driver.execute_script("""
+                    const footer = document.querySelector("#main footer") || document.querySelector("footer");
+                    if (footer) {
+                        const sendBtn = footer.querySelector("span[data-icon*='send'], button[aria-label*='Send' i], [data-testid='send']");
+                        if (sendBtn) {
+                            const target = sendBtn.closest('button') || sendBtn.closest("[role='button']") || sendBtn;
+                            target.click();
+                        }
+                    }
+                """)
+                time.sleep(0.25)
+            
             return True
             
         except Exception as e:
@@ -1104,18 +1206,18 @@ class WhatsAppAutoResponder:
             # Update activity timestamp upon sending reply
             self.last_activity_timestamp = time.time()
             
-            # ALWAYS record fingerprint, burst data IDs, and burst texts to prevent repeated loops
-            self.replied_fingerprints.add(fingerprint)
-            for b_id in burst_data_ids:
-                if b_id:
-                    self.replied_fingerprints.add(f"{contact}::{b_id}")
-            for b_msg in burst_messages:
-                self.replied_fingerprints.add(f"{contact}::{b_msg}")
-            self.sent_replies_history.add(ai_reply.strip().lower())
-            if len(self.sent_replies_history) > 100:
-                self.sent_replies_history.pop()
-            
             if sent:
+                # ONLY record fingerprint, burst data IDs, and burst texts upon successful delivery!
+                self.replied_fingerprints.add(fingerprint)
+                for b_id in burst_data_ids:
+                    if b_id:
+                        self.replied_fingerprints.add(f"{contact}::{b_id}")
+                for b_msg in burst_messages:
+                    self.replied_fingerprints.add(f"{contact}::{b_msg}")
+                self.sent_replies_history.add(ai_reply.strip().lower())
+                if len(self.sent_replies_history) > 100:
+                    self.sent_replies_history.pop()
+
                 print("🚀 Reply sent successfully via WhatsApp Web!")
                 
                 # Record in memory
@@ -1130,7 +1232,7 @@ class WhatsAppAutoResponder:
                     "sent": True
                 }
             else:
-                print("❌ Failed to send reply.")
+                print("⚠️ [Retry Notice] Failed to deliver reply on this cycle. Will retry automatically on next poll.")
                 print("─" * 60 + "\n")
                 return None
                 
