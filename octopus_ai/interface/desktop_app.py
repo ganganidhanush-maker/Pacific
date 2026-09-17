@@ -65,8 +65,7 @@ def run_desktop_app(host: str = None, port: int = None, reload: bool = True, ini
         if reload:
             cmd.extend([
                 "--reload",
-                "--reload-dir", str(repo_dir / "server"),
-                "--reload-dir", str(repo_dir / "octopus_ai"),
+                "--reload-dir", str(repo_dir),
                 "--reload-include", "*.html",
                 "--reload-exclude", "*.wav",
                 "--reload-exclude", "*.mp3",

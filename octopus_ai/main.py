@@ -397,7 +397,10 @@ def main(
         print(f"[OctopusAI] Agent initialization notice: {err}")
 
     # Launch desktop application window (falls back to browser if pywebview unavailable)
-    from octopus_ai.interface.desktop_app import run_desktop_app
+    try:
+        from interface.desktop_app import run_desktop_app
+    except ImportError:
+        from octopus_ai.interface.desktop_app import run_desktop_app
     run_desktop_app(
         host=host,
         port=port,
