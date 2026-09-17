@@ -804,8 +804,8 @@
       <!-- BASE IDLE LAYER: 100% Closed Mouth Natural Presence from Normal_Waiting_DO____Keep_t -->
       <video class="avatar-video avatar-idle" id="avatarVideoIdle" src="/assets/videos/idle.mp4" autoplay loop muted playsinline preload="auto"></video>
       <!-- DYNAMIC ACTION DUAL-BUFFER: Seamless Ping-Pong Crossfade (No Black Screen / No Seams) -->
-      <video class="avatar-video action-a video-hidden" id="avatarVideoActionA" src="/assets/videos/speaking_5.mp4" loop muted playsinline preload="auto"></video>
-      <video class="avatar-video action-b video-hidden" id="avatarVideoActionB" src="/assets/videos/speaking_6.mp4" loop muted playsinline preload="auto"></video>
+      <video class="avatar-video action-a video-hidden" id="avatarVideoActionA" src="/assets/videos/speaking_5.mp4" muted playsinline preload="auto"></video>
+      <video class="avatar-video action-b video-hidden" id="avatarVideoActionB" src="/assets/videos/speaking_6.mp4" muted playsinline preload="auto"></video>
       <!-- PERSISTENT AUDIO ELEMENT: Rock-solid Web Audio graph connection without leaks -->
       <audio id="avatarAudio" preload="auto" playsinline crossorigin="anonymous" style="display:none;"></audio>
     </div>
@@ -998,17 +998,16 @@ class LayeredAvatarEngine {
 
     const attachBufferListeners = (vid, bufName) => {
       if (!vid) return;
-      // Fallback if clip ends before timeupdate anticipation
+      // Seamless ping-pong loop when a clip ends or nears end
       vid.addEventListener('ended', () => {
-        if (this.activeBuffer === bufName && !this.isTransitioning && this.state !== 'idle') {
-          this.playNextActionClip(this.state);
+        if (this.activeBuffer === bufName && this.state !== 'idle') {
+          this.playActionClip(this.state);
         }
       });
-      // Anticipate clip end by 350ms to crossfade before reaching final freeze-frame
       vid.addEventListener('timeupdate', () => {
-        if (this.activeBuffer === bufName && !this.isTransitioning && this.state !== 'idle' && this.isMouthActive) {
+        if (this.activeBuffer === bufName && !this.isTransitioning && this.state !== 'idle') {
           if (vid.duration && vid.currentTime >= (vid.duration - 0.35)) {
-            this.playNextActionClip(this.state);
+            this.playActionClip(this.state);
           }
         }
       });
@@ -1048,7 +1047,7 @@ class LayeredAvatarEngine {
     return chosen;
   }
 
-  playNextActionClip(targetState, criteria = {}) {
+  playActionClip(targetState, criteria = {}) {
     const clip = this.pickNextClip(targetState, criteria);
     if (!clip) return;
 
@@ -1056,72 +1055,84 @@ class LayeredAvatarEngine {
     const nextVid = this.getInactiveVideo();
     if (!currentVid || !nextVid) return;
 
-    // Check if we are starting fresh from idle (both buffers hidden)
-    const isFirstStart = currentVid.classList.contains('video-hidden');
+    // Check if the current video buffer is actively playing and visible
+    const isCurrentActive = !currentVid.paused &&
+                            !currentVid.classList.contains('video-hidden') &&
+                            currentVid.currentTime > 0.05 &&
+                            (currentVid.duration ? (currentVid.currentTime < currentVid.duration - 0.1) : true);
 
-    if (isFirstStart) {
+    if (!isCurrentActive) {
+      // Direct fresh start: immediately load clip, make visible, bring to top, and play
+      this.isTransitioning = false;
       currentVid.src = clip.file;
       currentVid.playbackRate = this.playbackRate;
       currentVid.currentTime = 0;
+      currentVid.style.zIndex = '3';
+      nextVid.style.zIndex = '2';
+      currentVid.classList.remove('video-hidden');
+      nextVid.classList.add('video-hidden');
+      nextVid.pause();
       this.currentActionClip = clip;
-      currentVid.play().then(() => {
-        if (this.isMouthActive && this.state !== 'idle') {
-          currentVid.classList.remove('video-hidden');
-        }
-      }).catch(() => {});
+      currentVid.play().catch(err => console.warn('Avatar video play:', err));
       return;
     }
 
-    // Ping-pong double-buffer crossfade: zero black frames, zero freeze
+    // Smooth ping-pong crossfade to nextVid: zero black frames, zero seams
+    if (this.isTransitioning) return;
     this.isTransitioning = true;
     nextVid.src = clip.file;
     nextVid.playbackRate = this.playbackRate;
     nextVid.currentTime = 0;
-    nextVid.classList.add('video-hidden');
+    nextVid.style.zIndex = '3';
+    currentVid.style.zIndex = '2';
 
-    const onReady = () => {
-      nextVid.removeEventListener('canplay', onReady);
+    const onCanPlay = () => {
+      nextVid.removeEventListener('canplay', onCanPlay);
       nextVid.play().then(() => {
-        if (this.isMouthActive && this.state !== 'idle') {
-          nextVid.classList.remove('video-hidden');
-          currentVid.classList.add('video-hidden');
-        }
+        nextVid.classList.remove('video-hidden');
         setTimeout(() => {
+          currentVid.classList.add('video-hidden');
           currentVid.pause();
           this.isTransitioning = false;
-        }, 340);
+        }, 320);
         this.activeBuffer = (this.activeBuffer === 'A') ? 'B' : 'A';
         this.currentActionClip = clip;
-      }).catch(() => {
+      }).catch(err => {
+        console.warn('Next avatar video play notice:', err);
         this.isTransitioning = false;
       });
     };
 
     if (nextVid.readyState >= 3) {
-      onReady();
+      onCanPlay();
     } else {
-      nextVid.addEventListener('canplay', onReady, { once: true });
+      nextVid.addEventListener('canplay', onCanPlay, { once: true });
     }
   }
 
+  isCurrentBufferPlaying() {
+    const active = this.getActiveVideo();
+    return active && !active.paused && !active.classList.contains('video-hidden') && active.currentTime > 0.05;
+  }
+
   setState(newState, criteria = {}) {
+    if (this.state === newState && newState !== 'idle' && this.isCurrentBufferPlaying()) {
+      return;
+    }
     this.state = newState;
     if (newState === 'idle') {
+      this.isMouthActive = false;
       this.setMouthVisible(false);
       setTimeout(() => {
         if (this.state === 'idle') {
-          if (this.actionVideoA) this.actionVideoA.pause();
-          if (this.actionVideoB) this.actionVideoB.pause();
+          if (this.actionVideoA) { this.actionVideoA.pause(); this.actionVideoA.classList.add('video-hidden'); }
+          if (this.actionVideoB) { this.actionVideoB.pause(); this.actionVideoB.classList.add('video-hidden'); }
         }
-      }, 350);
-    } else if (newState === 'thinking') {
+      }, 320);
+    } else {
+      this.isMouthActive = true;
       this.setMouthVisible(true);
-      this.playNextActionClip('thinking', criteria);
-    } else if (newState === 'speaking') {
-      if (criteria.immediate) {
-        this.setMouthVisible(true);
-      }
-      this.playNextActionClip('speaking', criteria);
+      this.playActionClip(newState, criteria);
     }
   }
 
@@ -1129,7 +1140,12 @@ class LayeredAvatarEngine {
     this.isMouthActive = visible;
     if (visible) {
       const active = this.getActiveVideo();
-      if (active) active.classList.remove('video-hidden');
+      if (active) {
+        active.classList.remove('video-hidden');
+        if (active.paused && this.state !== 'idle') {
+          active.play().catch(() => {});
+        }
+      }
     } else {
       if (this.actionVideoA) this.actionVideoA.classList.add('video-hidden');
       if (this.actionVideoB) this.actionVideoB.classList.add('video-hidden');
@@ -1180,7 +1196,6 @@ const agentConfigs = {
 
 // Deterministic Video & 3D Avatar State Transition
 function switchVideoState(newState) {
-  if (currentState === newState) return;
   currentState = newState;
 
   if (newState === 'thinking') {
@@ -1191,6 +1206,9 @@ function switchVideoState(newState) {
     avatarEngine.setState('speaking');
     statusDot.className = 'status-dot speaking';
     statusText.textContent = 'Speaking…';
+  } else if (newState === 'listening') {
+    avatarEngine.setState('idle');
+    statusDot.className = 'status-dot thinking';
   } else {
     avatarEngine.setState('idle');
     statusDot.className = 'status-dot';
@@ -1269,20 +1287,20 @@ function setupAudioLipSync(audioElement, spokenText) {
   const duration = audioElement.duration || Math.max(wordCount / 2.5, 1.5);
   const wordsPerSec = wordCount / Math.max(duration, 0.5);
   // Human conversational speech ~2.5 words/sec. Dynamically scale lip motion speed!
-  const cadenceMultiplier = Math.min(Math.max(wordsPerSec / 2.5, 0.85), 1.25);
-  avatarEngine.setPlaybackRate(cadenceMultiplier);
+  const baseCadence = Math.min(Math.max(wordsPerSec / 2.5, 0.9), 1.25);
+  avatarEngine.setPlaybackRate(baseCadence);
 
   const bufferLength = audioAnalyser ? audioAnalyser.frequencyBinCount : 0;
   const dataArray = bufferLength ? new Uint8Array(bufferLength) : null;
-  let quietFrames = 0;
-  let signalDetected = false;
 
   function monitorLipSync() {
     if (!avatarAudio || avatarAudio.paused || avatarAudio.ended) {
       if (lipSyncAnimFrame) cancelAnimationFrame(lipSyncAnimFrame);
-      avatarEngine.setMouthVisible(false);
       return;
     }
+
+    // Audio is actively playing: GUARANTEE the speaking video layer is visible and active!
+    avatarEngine.setMouthVisible(true);
 
     if (audioAnalyser && dataArray) {
       audioAnalyser.getByteTimeDomainData(dataArray);
@@ -1293,24 +1311,15 @@ function setupAudioLipSync(audioElement, spokenText) {
       }
       const rms = Math.sqrt(sum / bufferLength);
 
-      if (rms > 0.015) {
-        signalDetected = true;
-        quietFrames = 0;
-        avatarEngine.setMouthVisible(true);
-      } else if (signalDetected) {
-        // Natural inter-sentence pause: only hide if sound was previously active and now paused for >120ms
-        quietFrames++;
-        if (quietFrames >= 8) {
-          avatarEngine.setMouthVisible(false);
-        }
+      // Dynamically modulate cadence according to live vocal energy!
+      // Louder syllables speed up mouth motion; softer words slow down
+      if (rms > 0.12) {
+        avatarEngine.setPlaybackRate(Math.min(baseCadence * 1.15, 1.3));
+      } else if (rms > 0.04) {
+        avatarEngine.setPlaybackRate(baseCadence);
       } else {
-        // Audio is actively playing but analyser is buffering or unmetered:
-        // KEEP THE MOUTH VISIBLY TALKING!
-        avatarEngine.setMouthVisible(true);
+        avatarEngine.setPlaybackRate(Math.max(baseCadence * 0.92, 0.85));
       }
-    } else {
-      // Fallback if no analyser: ALWAYS KEEP TALKING WHILE AUDIO PLAYS!
-      avatarEngine.setMouthVisible(true);
     }
 
     lipSyncAnimFrame = requestAnimationFrame(monitorLipSync);
@@ -1329,13 +1338,14 @@ function playAgentSpeech(audioUrl, text) {
   }
 
   statusText.textContent = text;
+  currentState = 'speaking';
+  statusDot.className = 'status-dot speaking';
 
   const words = (text || '').trim().split(/\s+/).filter(w => w.length > 0);
   const criteria = words.length <= 5 ? { tempo: 'fast' } : {};
 
-  // IMMEDIATELY activate the voice frame so he talks right away!
-  avatarEngine.setState('speaking', { ...criteria, immediate: true });
-  statusDot.className = 'status-dot speaking';
+  // IMMEDIATELY activate the speaking video so mouth starts moving with zero delay!
+  avatarEngine.setState('speaking', criteria);
   avatarEngine.setMouthVisible(true);
 
   if (!audioUrl || !avatarAudio) {
@@ -1354,8 +1364,23 @@ function playAgentSpeech(audioUrl, text) {
     avatarAudio.src = audioUrl;
 
     avatarAudio.onplay = () => {
+      currentState = 'speaking';
       avatarEngine.setMouthVisible(true);
       setupAudioLipSync(avatarAudio, text);
+    };
+
+    // Continuous heartbeat: keep talking avatar active and in sync as audio advances
+    avatarAudio.ontimeupdate = () => {
+      if (!avatarAudio.paused && !avatarAudio.ended && avatarAudio.currentTime > 0) {
+        if (avatarEngine.state !== 'speaking') {
+          avatarEngine.setState('speaking');
+        }
+        const activeVid = avatarEngine.getActiveVideo();
+        if (activeVid && activeVid.paused) {
+          activeVid.play().catch(() => {});
+        }
+        avatarEngine.setMouthVisible(true);
+      }
     };
 
     avatarAudio.onended = () => {
@@ -1375,14 +1400,18 @@ function playAgentSpeech(audioUrl, text) {
       }, Math.min(Math.max(words.length * 350, 2000), 5000));
     };
 
-    avatarAudio.play().catch(err => {
-      console.warn('Direct audio play notice:', err);
-      // If browser blocked autoplay, keep talking for duration of message
-      setTimeout(() => {
-        switchVideoState('idle');
-        statusText.textContent = 'Ready';
-      }, Math.min(Math.max(words.length * 350, 2000), 5000));
-    });
+    const playPromise = avatarAudio.play();
+    if (playPromise !== undefined) {
+      playPromise.catch(err => {
+        console.warn('Direct audio play notice:', err);
+        // If browser blocked autoplay, keep talking for duration of message
+        const fallbackMs = Math.min(Math.max(words.length * 400, 2500), 7000);
+        setTimeout(() => {
+          switchVideoState('idle');
+          statusText.textContent = 'Ready';
+        }, fallbackMs);
+      });
+    }
   } catch (playErr) {
     console.warn('Audio play exception:', playErr);
     setTimeout(() => switchVideoState('idle'), 3000);
