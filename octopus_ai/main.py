@@ -224,6 +224,34 @@ def _safe_copy_tree(src: str, dst: str) -> None:
             pass
 
 
+def cleanup_orphaned_automation_chrome(target_user_data_dir: str) -> int:
+    """
+    Safely find and terminate background chrome.exe processes associated ONLY with
+    the automation user-data-dir, leaving user's personal browsing tabs completely untouched.
+    """
+    if not target_user_data_dir or not os.path.exists(target_user_data_dir):
+        return 0
+    try:
+        import psutil
+        killed = 0
+        norm_target = os.path.normpath(os.path.abspath(target_user_data_dir)).lower()
+        for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+            try:
+                name = (proc.info.get('name') or '').lower()
+                if 'chrome' in name:
+                    cmdline = proc.info.get('cmdline') or []
+                    cmd_str = ' '.join(cmdline).lower()
+                    if norm_target in cmd_str or ('automationdata' in cmd_str and 'automationdata' in norm_target):
+                        proc.kill()
+                        killed += 1
+            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                pass
+        return killed
+    except Exception as e:
+        print(f"[OctopusAI] Note during chrome process cleanup: {e}")
+        return 0
+
+
 # ==============================================================================
 # 6. Cross-Platform Chrome Profile Resolution (Windows, macOS, Linux)
 # ==============================================================================
@@ -238,6 +266,7 @@ def prepare_main_profile() -> Tuple[str, str]:
     chrome_data_env = os.environ.get("CHROME_USER_DATA_DIR")
     if chrome_data_env:
         os.makedirs(chrome_data_env, exist_ok=True)
+        cleanup_orphaned_automation_chrome(chrome_data_env)
         return chrome_data_env, "Configured Chrome Data"
 
     # 2. Platform-specific resolution
@@ -266,7 +295,11 @@ def prepare_main_profile() -> Tuple[str, str]:
     if not dst_root:
         local_fallback = os.path.join(str(this_dir), ".chrome_profile")
         os.makedirs(local_fallback, exist_ok=True)
+        cleanup_orphaned_automation_chrome(local_fallback)
         return local_fallback, "Local Fallback Profile"
+
+    # Safely terminate any orphaned automation Chrome processes holding open file locks
+    cleanup_orphaned_automation_chrome(dst_root)
 
     dst_default = os.path.join(dst_root, "Default")
 

@@ -80,19 +80,49 @@ class BrowserEngine:
             )
             
             # Initialize driver
-            if self.chrome_path:
-                service = Service(self.chrome_path)
-                self.driver = webdriver.Chrome(service=service, options=chrome_options)
-            else:
+            def _spawn_chrome():
+                if self.chrome_path:
+                    service = Service(self.chrome_path)
+                    return webdriver.Chrome(service=service, options=chrome_options)
                 try:
-                    self.driver = webdriver.Chrome(options=chrome_options)
-                except Exception:
+                    return webdriver.Chrome(options=chrome_options)
+                except Exception as direct_err:
                     try:
                         from webdriver_manager.chrome import ChromeDriverManager
                         service = Service(ChromeDriverManager().install())
-                        self.driver = webdriver.Chrome(service=service, options=chrome_options)
+                        return webdriver.Chrome(service=service, options=chrome_options)
                     except Exception:
-                        raise
+                        raise direct_err
+
+            try:
+                self.driver = _spawn_chrome()
+            except Exception as first_launch_err:
+                # If Chrome failed to start due to orphaned background lock or crash, self-heal and retry
+                err_text = str(first_launch_err).lower()
+                if any(k in err_text for k in ["devtoolsactiveport", "crashed", "session not created", "unable to discover open pages"]):
+                    if self.user_data_dir:
+                        try:
+                            from main import cleanup_orphaned_automation_chrome
+                            cleanup_orphaned_automation_chrome(self.user_data_dir)
+                            # Remove lockfiles
+                            import shutil
+                            for lock_name in ["SingletonLock", "SingletonCookie", "SingletonSocket", "lockfile", "DevToolsActivePort"]:
+                                lf = os.path.join(self.user_data_dir, lock_name)
+                                if os.path.exists(lf):
+                                    try:
+                                        if os.path.isfile(lf) or os.path.islink(lf):
+                                            os.remove(lf)
+                                        elif os.path.isdir(lf):
+                                            shutil.rmtree(lf, ignore_errors=True)
+                                    except Exception:
+                                        pass
+                        except Exception:
+                            pass
+                    import time
+                    time.sleep(1.0)
+                    self.driver = _spawn_chrome()
+                else:
+                    raise first_launch_err
             
             # Execute CDP command to hide automation
             self.driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
@@ -130,8 +160,28 @@ class BrowserEngine:
         return self.driver
     
     def is_ready(self) -> bool:
-        """Check if browser is ready for automation"""
-        return self.is_initialized and self.driver is not None
+        """Check if browser is ready and actively responsive for automation"""
+        if not self.is_initialized or self.driver is None:
+            return False
+        try:
+            # Ping active session handle; raises if browser was closed by user
+            _ = self.driver.current_window_handle
+            return True
+        except Exception:
+            self.is_initialized = False
+            self.driver = None
+            return False
+
+    def close(self):
+        """Clean up and close WebDriver session."""
+        if self.driver:
+            try:
+                self.driver.quit()
+            except Exception:
+                pass
+            finally:
+                self.driver = None
+                self.is_initialized = False
 
     def get_current_url(self) -> Optional[str]:
         """Get current URL if browser is ready, else None"""

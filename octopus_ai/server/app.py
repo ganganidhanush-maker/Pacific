@@ -191,6 +191,76 @@ AVAILABLE_AGENTS = [
 
 
 
+def is_whatsapp_open_request(msg: str) -> bool:
+    """
+    Check if the user is asking to open / launch WhatsApp Web without sending a specific message.
+    Handles conversational questions, polite requests, and multilingual commands.
+    """
+    m = msg.lower().strip()
+    if m in ['whatsapp', 'whatsapp web', 'web whatsapp', 'wa', '/whatsapp', '/wa']:
+        return True
+    if any(k in m for k in [' saying ', ' send message to', ' message to ', ' text to ', ' pampu ', ' broadcast ']):
+        return False
+    open_keywords = [
+        'open whatsapp', 'launch whatsapp', 'start whatsapp', 'activate whatsapp',
+        'open wa', 'open whatsapp web', 'whatsapp open', 'whatsapp kholo',
+        'whatsapp open cheyi', 'whatsapp open cheyyi', 'whatsapp chupinchu', 'whatsapp start cheyi',
+        'open my whatsapp', 'bring up whatsapp', 'whatsapp web open'
+    ]
+    if any(k in m for k in open_keywords):
+        return True
+    tokens = re.findall(r'[a-zA-Z0-9]+', m)
+    if 'whatsapp' in tokens:
+        open_verbs = {'open', 'launch', 'start', 'bring', 'navigate', 'kholo', 'cheyi'}
+        if any(v in tokens for v in open_verbs):
+            if 'to' in tokens:
+                to_idx = tokens.index('to')
+                if to_idx + 1 < len(tokens) and tokens[to_idx + 1] not in {'whatsapp', 'web', 'chrome', 'the'}:
+                    return False
+            return True
+    return False
+
+
+def _clean_contact_name(contact: str) -> str:
+    for junk in [' on whatsapp', ' in whatsapp', ' via whatsapp', ' on web', ' in web', ' please', ' urgent', ' urgently']:
+        if contact.lower().endswith(junk):
+            contact = contact[:-len(junk)].strip()
+    return contact.strip()
+
+
+def parse_whatsapp_request(user_msg: str) -> tuple[str, str]:
+    """
+    Extract contact name and message body from natural conversational WhatsApp commands.
+    """
+    msg_clean = user_msg.strip()
+    # Pattern 1: to <contact> saying <message>
+    m = re.search(r'\bto\s+([a-zA-Z0-9\s_\.\-\+]+?)\s+saying\s+(.+)$', msg_clean, re.IGNORECASE)
+    if m:
+        return _clean_contact_name(m.group(1)), m.group(2).strip()
+    # Pattern 2: to <contact>\s*:\s*<message>
+    m = re.search(r'\bto\s+([a-zA-Z0-9\s_\.\-\+]+?)\s*:\s*(.+)$', msg_clean, re.IGNORECASE)
+    if m:
+        return _clean_contact_name(m.group(1)), m.group(2).strip()
+    # Pattern 3: to <contact> that <message>
+    m = re.search(r'\bto\s+([a-zA-Z0-9\s_\.\-\+]+?)\s+that\s+(.+)$', msg_clean, re.IGNORECASE)
+    if m:
+        return _clean_contact_name(m.group(1)), m.group(2).strip()
+    # Pattern 4: send <message> to <contact>
+    m = re.search(r'\bsend\s+(.+?)\s+to\s+([a-zA-Z0-9\s_\.\-\+]+?)(?:\s+on\s+whatsapp|\s+in\s+whatsapp|\s+via\s+whatsapp|$)', msg_clean, re.IGNORECASE)
+    if m:
+        msg_body, contact = m.group(1).strip(), m.group(2).strip()
+        msg_body = re.sub(r'^(?:a\s+)?whatsapp\s+message\s+(?:saying\s+)?', '', msg_body, flags=re.IGNORECASE)
+        msg_body = re.sub(r'^(?:a\s+)?message\s+(?:saying\s+)?', '', msg_body, flags=re.IGNORECASE)
+        if msg_body.lower() in {'message', 'whatsapp message', 'a message', 'a whatsapp message', ''}:
+            msg_body = 'Hello!'
+        return _clean_contact_name(contact), msg_body.strip()
+    # Pattern 5: send message to <contact>
+    m = re.search(r'\bto\s+([a-zA-Z0-9\s_\.\-\+]+?)(?:\s+on\s+whatsapp|\s+in\s+whatsapp|\s+via\s+whatsapp|$)', msg_clean, re.IGNORECASE)
+    if m:
+        return _clean_contact_name(m.group(1)), 'Hello!'
+    return '', ''
+
+
 def classify_intent(user_msg: str, current_agent: str = "main") -> str:
     """
     Intelligent Intent Classifier:
@@ -213,30 +283,16 @@ def classify_intent(user_msg: str, current_agent: str = "main") -> str:
     if any(w in msg_lower for w in ["/main", "/orchestrator", "main agent", "switch to main"]):
         return "main"
 
-    # 1.5 Conversational & Question Filter:
-    # If user is asking a question or talking casually, do NOT falsely route to automation agents
-    is_conversational = (
-        msg_lower.endswith("?") or
-        any(msg_lower.startswith(q) for q in [
-            "why", "how", "what", "who", "where", "when", "can you tell", "can you explain",
-            "explain", "tell me", "is it", "are you", "do you", "why did", "why is",
-            "why does", "what is", "how do", "how does", "what are", "who is"
-        ]) or
-        any(w in msg_lower for w in [
-            "chating", "chatting", "speaking", "talking", "sending terminal", "commands not the user",
-            "instead of speaking", "don't reply", "dont reply", "group chat", "multi message",
-            "patterns", "tell a joke", "who are you", "what's up", "whats up", "how are you",
-            "good morning", "good evening", "hi bro", "hey bro", "ela unnav", "cheppu bro"
-        ])
-    )
-    if is_conversational and current_agent in ["main", "chatbot"]:
-        return current_agent
-
-    # 2. Desktop actions: Require explicit action verbs or composite imperative commands
-    desktop_action_verbs = [
-        "open", "launch", "start", "run", "take", "capture", "snip",
-        "find", "search", "organize", "move", "touch", "lock", "mute", "unmute", "write"
+    # 2. Check for Web actions FIRST (including Telugu & polite requests)
+    web_actions = [
+        "whatsapp", "canva", "instagram", "activate auto", "start auto",
+        "stop auto", "auto responder", "auto chat", "send message to", "message to",
+        "search google", "browse to"
     ]
+    if any(k in msg_lower for k in web_actions):
+        return "web"
+
+    # 3. Check for Desktop actions (calc, notepad, files, lock, mute)
     desktop_targets = [
         "calculator", "calc", "notepad", "assignment", "paint", "mspaint",
         "task manager", "taskmgr", "command prompt", "powershell", "terminal",
@@ -244,101 +300,22 @@ def classify_intent(user_msg: str, current_agent: str = "main") -> str:
         "screenshot", "screen capture", "capture screen", "volume", "lock screen", "lock workstation",
         "lock pc", "camera", "settings"
     ]
-    has_desktop_action = any(
-        target in msg_lower and any(verb in msg_lower for verb in desktop_action_verbs)
-        for target in desktop_targets
-    ) or any(k in msg_lower for k in [
-        "open notepad", "open new notepad", "open calculator", "launch calculator",
-        "open paint", "take screenshot", "lock workstation", "lock pc", "lock windows",
-        "mute volume", "unmute volume", "toggle mute", "write python assignment",
-        "find file", "search file", "organize file", "move file", "touch file",
-        "launch calculator app"
-    ])
-    if has_desktop_action and not is_conversational:
+    if any(target in msg_lower for target in desktop_targets):
         return "desktop"
 
-    # 3. Web actions: WhatsApp, Canva, Instagram, Google search
-    web_actions = [
-        "open whatsapp", "open canva", "open instagram", "activate whatsapp",
-        "start whatsapp", "auto responder", "auto chat", "deactivate whatsapp",
-        "stop whatsapp", "send whatsapp", "send message to", "message to",
-        "create presentation", "presentation deck", "search google", "browse to"
-    ]
-    if any(k in msg_lower for k in web_actions) and not is_conversational:
-        return "web"
-
-    # 4. Research actions: slide outline, literature, study research
+    # 4. Research triggers
     research_triggers = [
         "presentation outline", "slide outline", "synthesize topic",
-        "academic research outline", "syllabus research", "research paper"
+        "academic research outline", "syllabus research", "research paper", "deep research"
     ]
-    if any(k in msg_lower for k in research_triggers) and not is_conversational:
+    if any(k in msg_lower for k in research_triggers):
         return "research"
 
-    # 5. Chatbot actions
-    chatbot_triggers = [
-        "explain", "teach me", "tutor", "quiz me", "lesson plan", "help with studies"
-    ]
-    if any(k in msg_lower for k in chatbot_triggers) and current_agent == "chatbot":
+    # 5. Conversational & Question Filter for chatbot
+    if current_agent == "chatbot":
         return "chatbot"
 
     return current_agent
-
-
-def parse_whatsapp_request(user_msg: str) -> tuple:
-    """
-    Extract contact name and message from commands while preserving original casing.
-    """
-    msg_lower = user_msg.lower()
-    contact = ""
-    message = ""
-
-    to_idx = msg_lower.find("to ")
-    if to_idx != -1:
-        after_to = user_msg[to_idx + 3:]
-        after_to_lower = msg_lower[to_idx + 3:]
-
-        saying_idx = after_to_lower.find(" saying ")
-        colon_idx = after_to.find(":")
-        that_idx = after_to_lower.find(" that ")
-
-        if saying_idx != -1:
-            contact = after_to[:saying_idx]
-            message = after_to[saying_idx + len(" saying "):]
-        elif colon_idx != -1:
-            contact = after_to[:colon_idx]
-            message = after_to[colon_idx + 1:]
-        elif that_idx != -1:
-            contact = after_to[:that_idx]
-            message = after_to[that_idx + len(" that "):]
-        else:
-            cleaned = after_to
-            cleaned_lower = after_to_lower
-            for kw in [" on whatsapp", " in whatsapp", " in web", " on web"]:
-                kw_idx = cleaned_lower.find(kw)
-                if kw_idx != -1:
-                    cleaned = cleaned[:kw_idx] + cleaned[kw_idx + len(kw):]
-                    cleaned_lower = cleaned.lower()
-            and_idx = cleaned_lower.find(" and ")
-            if and_idx != -1:
-                cleaned = cleaned[:and_idx]
-            contact = cleaned.strip()
-            message = "Hello!"
-    else:
-        cleaned = user_msg
-        cleaned_lower = msg_lower
-        for kw in ["open whatsapp", "whatsapp web", "whatsapp", "in web", "send message", "message"]:
-            while True:
-                kw_idx = cleaned_lower.find(kw)
-                if kw_idx != -1:
-                    cleaned = cleaned[:kw_idx] + cleaned[kw_idx + len(kw):]
-                    cleaned_lower = cleaned.lower()
-                else:
-                    break
-        contact = cleaned.strip()
-        message = "Hello!"
-
-    return contact.strip(), message.strip()
 
 
 def detect_language_and_voice(text: str) -> str:
@@ -455,6 +432,13 @@ def get_or_create_visible_engine() -> BrowserEngine:
     """
     global engine_instance, registry_instance
     if engine_instance is None or not engine_instance.is_ready():
+        if engine_instance is not None:
+            try:
+                engine_instance.close()
+            except Exception:
+                pass
+            engine_instance = None
+
         from octopus_ai.main import prepare_main_profile
         user_data_dir, profile_label = prepare_main_profile()
         print(f"🚀 Launching Real Visible Chrome (Profile: {profile_label})...")
@@ -470,6 +454,11 @@ def get_or_create_visible_engine() -> BrowserEngine:
             registry_instance = create_default_registry(driver=driver)
         else:
             print(f"⚠️ Chrome launch error: {res.get('error')}")
+            try:
+                engine_instance.close()
+            except Exception:
+                pass
+            engine_instance = None
     return engine_instance
 
 
@@ -673,6 +662,56 @@ async def tts_endpoint(req: TTSRequest):
         "success": audio_url is not None,
         "audio_url": audio_url
     }
+
+
+@app.post("/api/voice/transcribe")
+async def api_voice_transcribe(
+    request: Request,
+    file: Optional[UploadFile] = File(None),
+):
+    """
+    Transcribe incoming voice audio using Groq Whisper model (whisper-large-v3-turbo).
+    Supports multipart/form-data upload (audio/webm, audio/wav, audio/mp4, etc.)
+    as well as JSON payloads containing base64 audio strings.
+    """
+    audio_bytes = None
+    filename = "audio.webm"
+    language = None
+
+    if file is not None:
+        audio_bytes = await file.read()
+        filename = file.filename or "audio.webm"
+    else:
+        try:
+            content_type = request.headers.get("content-type", "")
+            if "application/json" in content_type:
+                body = await request.json()
+                b64 = body.get("audio_base64") or body.get("audio") or ""
+                filename = body.get("filename") or "audio.webm"
+                language = body.get("language")
+                if b64:
+                    import base64
+                    if "," in b64:
+                        b64 = b64.split(",", 1)[1]
+                    audio_bytes = base64.b64decode(b64)
+            else:
+                raw = await request.body()
+                if raw:
+                    audio_bytes = raw
+        except Exception as e:
+            return {"success": False, "error": f"Audio payload parse failed: {e}", "text": ""}
+
+    if not audio_bytes or len(audio_bytes) < 100:
+        return {"success": False, "error": "No valid audio received", "text": ""}
+
+    try:
+        from octopus_ai.agent.groq_llm import GroqLLM
+        llm = GroqLLM()
+        text = llm.transcribe_audio(audio_bytes=audio_bytes, filename=filename, language=language)
+        return {"success": bool(text and text.strip()), "text": text.strip() if text else ""}
+    except Exception as err:
+        return {"success": False, "error": str(err), "text": ""}
+
 
 
 @app.post("/api/whatsapp/auto-responder/start")
@@ -884,7 +923,7 @@ async def chat_endpoint(req: ChatRequest, background_tasks: BackgroundTasks):
                 except Exception:
                     response_text = "Opening WhatsApp to send broadcast update."
                     background_tasks.add_task(run_whatsapp_task, "", "")
-            elif user_lower in ["open whatsapp", "open whatsapp web", "launch whatsapp", "/whatsapp", "/wa"]:
+            elif is_whatsapp_open_request(user_msg):
                 response_text = "Opening WhatsApp Web in Chrome."
                 triggered_action = {"agent": "web", "subsystem": "whatsapp", "action": "open"}
                 background_tasks.add_task(run_whatsapp_task, "", "")
@@ -913,7 +952,13 @@ async def chat_endpoint(req: ChatRequest, background_tasks: BackgroundTasks):
                         })
                         options_str = "\n".join(f"{i+1}. {m}" for i, m in enumerate(matches))
                         response_text = f"I found {len(matches)} contacts matching '{contact}':\n{options_str}\nWhich one would you like to message?"
-                        triggered_action = {"agent": "web", "subsystem": "whatsapp", "action": "disambiguate", "matches": matches}
+                        triggered_action = {
+                            "agent": "web",
+                            "subsystem": "whatsapp",
+                            "action": "disambiguate",
+                            "matches": matches,
+                            "choices": matches
+                        }
                     elif wa_res and wa_res.success:
                         response_text = wa_res.message
                         triggered_action = {"agent": "web", "subsystem": "whatsapp", "action": "sent", "contact": contact}
@@ -1043,13 +1088,18 @@ async def chat_endpoint(req: ChatRequest, background_tasks: BackgroundTasks):
     response_text = sanitize_speech_response(response_text)
     audio_url = await generate_speech_file(response_text)
 
+    choices = None
+    if isinstance(triggered_action, dict):
+        choices = triggered_action.get("choices") or triggered_action.get("matches")
+
     return {
         "success": True,
         "response": response_text,
         "summary": summary_text,
         "audio_url": audio_url,
         "current_agent": CURRENT_AGENT,
-        "action": triggered_action
+        "action": triggered_action,
+        "choices": choices
     }
 
 

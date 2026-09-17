@@ -314,6 +314,30 @@ Respond in JSON format for tool calls, or natural language for responses."""
         """Get conversation history."""
         return self.conversation_history.copy()
 
+    def transcribe_audio(self, audio_bytes: bytes, filename: str = "audio.wav", language: Optional[str] = None) -> str:
+        """
+        Transcribe spoken audio bytes to text using Groq Whisper.
+        Supports English, Telugu, Hindi, and 90+ languages with ultra-low latency.
+        """
+        if not self.is_available or not self.client:
+            return ""
+        try:
+            import io
+            file_obj = io.BytesIO(audio_bytes)
+            file_obj.name = filename
+            kwargs = {
+                "file": file_obj,
+                "model": "whisper-large-v3-turbo",
+                "response_format": "text"
+            }
+            if language:
+                kwargs["language"] = language
+            transcription = self.client.audio.transcriptions.create(**kwargs)
+            return str(transcription).strip()
+        except Exception as e:
+            print(f"[GroqLLM] Audio transcription note: {e}")
+            return ""
+
 
 # Predefined automation workflows for common platforms
 PLATFORM_WORKFLOWS = {

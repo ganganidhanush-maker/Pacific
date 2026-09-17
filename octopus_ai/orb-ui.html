@@ -206,9 +206,10 @@
     flex-direction:column;
     align-items:center;
     justify-content:flex-end;
-    padding-bottom:34px;
+    padding-bottom:28px;
     position:relative;
-    overflow:hidden;
+    overflow-y:auto;
+    overflow-x:hidden;
   }
 
   /* Frameless Model (Big, prominent, perfectly seated on the search bar) */
@@ -429,6 +430,165 @@
     background:#e8f0fe;
     color:#1a73e8;
     border-color:#1a73e8;
+  }
+
+  /* ---------- EXPANDABLE RESPONSE DRAWER & CHIPS ---------- */
+  .response-card{
+    display:none;
+    margin-top:12px;
+    background:#ffffff;
+    border:1px solid var(--line);
+    border-radius:18px;
+    box-shadow:0 8px 30px rgba(32,33,36,0.12);
+    padding:16px 20px;
+    max-height:280px;
+    overflow-y:auto;
+    animation:drawerSlideUp .22s cubic-bezier(0.16, 1, 0.3, 1);
+    position:relative;
+    z-index:30;
+    text-align:left;
+  }
+  .response-card.open{
+    display:flex;
+    flex-direction:column;
+    gap:10px;
+  }
+  @keyframes drawerSlideUp{
+    from{ opacity:0; transform:translateY(8px); }
+    to{ opacity:1; transform:translateY(0); }
+  }
+
+  .response-header{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    padding-bottom:8px;
+    border-bottom:1px solid #f1f3f4;
+  }
+  .response-badge{
+    display:inline-flex;
+    align-items:center;
+    gap:6px;
+    padding:4px 10px;
+    background:#e8f0fe;
+    color:var(--c1);
+    font-size:12px;
+    font-weight:600;
+    border-radius:14px;
+  }
+  .response-badge.web{ background:#e6f4ea; color:#137333; }
+  .response-badge.desktop{ background:#fef7e0; color:#b06000; }
+  .response-badge.research{ background:#f3e8fd; color:#8430ce; }
+  .response-badge.chatbot{ background:#e8f0fe; color:#1a73e8; }
+  .response-badge.error{ background:#fce8e6; color:#c5221f; }
+
+  .response-actions{
+    display:flex;
+    align-items:center;
+    gap:6px;
+  }
+  .response-tool-btn{
+    background:transparent;
+    border:none;
+    color:var(--muted);
+    cursor:pointer;
+    padding:4px 8px;
+    border-radius:8px;
+    font-size:12px;
+    display:flex;
+    align-items:center;
+    gap:4px;
+    transition:background .15s ease, color .15s ease;
+  }
+  .response-tool-btn:hover{
+    background:#f1f3f4;
+    color:var(--ink);
+  }
+
+  .response-body{
+    font-size:14.5px;
+    line-height:1.55;
+    color:#202124;
+    white-space:pre-wrap;
+    word-break:break-word;
+    user-select:text;
+  }
+
+  /* Interactive Disambiguation Chips */
+  .response-chips{
+    display:flex;
+    flex-wrap:wrap;
+    gap:8px;
+    margin-top:6px;
+  }
+  .chip-btn{
+    border:1px solid rgba(66,133,244,0.35);
+    background:#f8faff;
+    color:#1a73e8;
+    padding:7px 15px;
+    border-radius:18px;
+    font-size:13px;
+    font-weight:500;
+    cursor:pointer;
+    display:inline-flex;
+    align-items:center;
+    gap:6px;
+    transition:all .15s ease;
+  }
+  .chip-btn:hover{
+    background:#1a73e8;
+    color:#fff;
+    border-color:#1a73e8;
+    transform:translateY(-1px);
+    box-shadow:0 3px 10px rgba(26,115,232,0.25);
+  }
+  .chip-btn.cancel{
+    border-color:#dadce0;
+    background:#f8f9fa;
+    color:#5f6368;
+  }
+  .chip-btn.cancel:hover{
+    background:#dadce0;
+    color:#202124;
+  }
+
+  /* Voice Recording Visual Feedback Overlay */
+  .voice-recording-pill{
+    display:none;
+    align-items:center;
+    gap:8px;
+    background:#fce8e6;
+    border:1px solid rgba(217,48,37,0.3);
+    color:#d93025;
+    font-size:12.5px;
+    font-weight:600;
+    border-radius:20px;
+    padding:6px 14px;
+    margin-top:8px;
+    margin-bottom:2px;
+  }
+  .voice-recording-pill.active{
+    display:inline-flex;
+    animation:micPulse 1.4s infinite;
+  }
+  .voice-bars{
+    display:flex;
+    align-items:center;
+    gap:3px;
+    height:14px;
+  }
+  .voice-bar{
+    width:3px;
+    background:#d93025;
+    border-radius:2px;
+    animation:voiceWave 0.8s infinite ease-in-out;
+  }
+  .voice-bar:nth-child(2){ animation-delay:0.15s; }
+  .voice-bar:nth-child(3){ animation-delay:0.3s; }
+  .voice-bar:nth-child(4){ animation-delay:0.45s; }
+  @keyframes voiceWave{
+    0%,100%{ height:4px; }
+    50%{ height:14px; }
   }
 
   /* ---------- BOTTOM-LEFT SETTINGS ---------- */
@@ -685,6 +845,33 @@
         <span class="status-dot" id="statusDot"></span>
         <span id="statusText">Ready</span>
       </div>
+
+      <!-- Live Voice Recording Audio Waveform Pill -->
+      <div class="voice-recording-pill" id="voiceRecordingPill">
+        <div class="voice-bars">
+          <div class="voice-bar"></div>
+          <div class="voice-bar"></div>
+          <div class="voice-bar"></div>
+          <div class="voice-bar"></div>
+        </div>
+        <span id="voiceRecordingText">Listening to voice command… Speak now</span>
+      </div>
+
+      <!-- Expandable Response Drawer / Card -->
+      <div class="response-card" id="responseCard">
+        <div class="response-header">
+          <div class="response-badge" id="responseBadge">
+            <span id="responseBadgeIcon">🧠</span>
+            <span id="responseBadgeText">Main Agent</span>
+          </div>
+          <div class="response-actions">
+            <button class="response-tool-btn" id="copyResponseBtn" title="Copy text">📋 Copy</button>
+            <button class="response-tool-btn" id="closeResponseBtn" title="Dismiss">✕</button>
+          </div>
+        </div>
+        <div class="response-body" id="responseBody"></div>
+        <div class="response-chips" id="responseChips"></div>
+      </div>
     </div>
   </div>
 
@@ -740,6 +927,17 @@ const micBtn = document.getElementById('micBtn');
 const langToggleBtn = document.getElementById('langToggleBtn');
 const statusDot = document.getElementById('statusDot');
 const statusText = document.getElementById('statusText');
+
+const voiceRecordingPill = document.getElementById('voiceRecordingPill');
+const voiceRecordingText = document.getElementById('voiceRecordingText');
+const responseCard = document.getElementById('responseCard');
+const responseBadge = document.getElementById('responseBadge');
+const responseBadgeIcon = document.getElementById('responseBadgeIcon');
+const responseBadgeText = document.getElementById('responseBadgeText');
+const responseBody = document.getElementById('responseBody');
+const responseChips = document.getElementById('responseChips');
+const copyResponseBtn = document.getElementById('copyResponseBtn');
+const closeResponseBtn = document.getElementById('closeResponseBtn');
 
 let currentAgent = 'main';
 let currentState = 'idle';
@@ -1243,6 +1441,78 @@ const clientSessionId = (function() {
   }
 })();
 
+// Display Response in Expandable Drawer / Card with Disambiguation Chips
+function displayResponse(data) {
+  if (!responseCard) return;
+  const agentKey = data.current_agent || currentAgent;
+  const cfg = agentConfigs[agentKey] || agentConfigs['main'];
+
+  // Configure Badge
+  responseBadge.className = 'response-badge ' + (agentKey || 'main');
+  responseBadgeIcon.textContent = cfg ? cfg.icon : '🧠';
+  responseBadgeText.textContent = cfg ? cfg.name : 'Main Agent';
+
+  if (!data.success) {
+    responseBadge.className = 'response-badge error';
+    responseBadgeIcon.textContent = '⚠️';
+    responseBadgeText.textContent = 'Notice';
+  }
+
+  // Set formatted text (combine response + summary if provided)
+  let text = data.response || '';
+  if (data.summary && data.summary !== data.response) {
+    text = (text ? text + '\n\n' : '') + data.summary;
+  }
+  responseBody.textContent = text || 'Operation executed.';
+
+  // Render Interactive Disambiguation Chips
+  responseChips.innerHTML = '';
+  const choices = data.choices || (data.action && (data.action.choices || data.action.matches));
+  if (Array.isArray(choices) && choices.length > 0) {
+    choices.forEach((choice, idx) => {
+      const btn = document.createElement('button');
+      btn.className = 'chip-btn';
+      btn.textContent = `${idx + 1}. ${choice}`;
+      btn.onclick = () => {
+        taskInput.value = choice;
+        submitTask();
+      };
+      responseChips.appendChild(btn);
+    });
+
+    // Add Cancel chip
+    const cancelBtn = document.createElement('button');
+    cancelBtn.className = 'chip-btn cancel';
+    cancelBtn.textContent = 'Cancel';
+    cancelBtn.onclick = () => {
+      taskInput.value = 'cancel';
+      submitTask();
+    };
+    responseChips.appendChild(cancelBtn);
+  }
+
+  responseCard.classList.add('open');
+}
+
+if (closeResponseBtn) {
+  closeResponseBtn.addEventListener('click', () => {
+    responseCard.classList.remove('open');
+  });
+}
+
+if (copyResponseBtn) {
+  copyResponseBtn.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(responseBody.textContent);
+      const original = copyResponseBtn.textContent;
+      copyResponseBtn.textContent = '✓ Copied!';
+      setTimeout(() => { copyResponseBtn.textContent = original; }, 1500);
+    } catch (e) {
+      console.warn('Copy failed:', e);
+    }
+  });
+}
+
 // Execute Task (User Input)
 async function submitTask() {
   if (isSubmitting) return;
@@ -1294,6 +1564,8 @@ async function submitTask() {
       });
     }
 
+    displayResponse(data);
+
     if (data.audio_url) {
       playAgentSpeech(data.audio_url, data.response);
     } else if (data.response) {
@@ -1305,6 +1577,10 @@ async function submitTask() {
     }
   } catch (err) {
     console.error('Task error:', err);
+    displayResponse({
+      success: false,
+      response: `Connection notice: ${err.message || 'Unable to reach backend agent.'}`
+    });
     switchVideoState('idle');
     statusText.textContent = 'Ready';
   } finally {
@@ -1327,13 +1603,13 @@ if (langToggleBtn) {
       langToggleBtn.textContent = 'TE';
       langToggleBtn.classList.add('telugu');
       langToggleBtn.title = 'Language: Telugu (తెలుగు) — Click to switch to English';
-      statusText.textContent = 'Speech Language: Telugu (తెలుగు)';
+      statusText.textContent = 'Voice Command Language: Telugu (తెలుగు)';
     } else {
       currentLang = 'en-IN';
       langToggleBtn.textContent = 'EN';
       langToggleBtn.classList.remove('telugu');
       langToggleBtn.title = 'Language: English (India) — Click to switch to Telugu';
-      statusText.textContent = 'Speech Language: English';
+      statusText.textContent = 'Voice Command Language: English';
     }
     if (recognition) {
       recognition.lang = currentLang;
@@ -1341,59 +1617,181 @@ if (langToggleBtn) {
   });
 }
 
-// Speech Recognition (Mic button)
+// =========================================================================
+// HIGH-PRECISION DUAL-ENGINE VOICE COMMAND SYSTEM
+// 1. Browser Web Speech API for real-time live typing preview
+// 2. High-Fidelity MediaRecorder + Groq Whisper STT (/api/voice/transcribe)
+// =========================================================================
 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 let recognition = null;
 let isListening = false;
+let mediaRecorder = null;
+let mediaStream = null;
+let audioChunks = [];
 
 if (SpeechRecognition) {
-  recognition = new SpeechRecognition();
-  recognition.continuous = false;
-  recognition.interimResults = true;
-  recognition.lang = currentLang;
+  try {
+    recognition = new SpeechRecognition();
+    recognition.continuous = false;
+    recognition.interimResults = true;
+    recognition.lang = currentLang;
 
-  recognition.onstart = () => {
-    isListening = true;
-    micBtn.classList.add('active');
-    switchVideoState('listening');
-    statusText.textContent = currentLang === 'te-IN' ? 'Listening in Telugu (తెలుగు)…' : 'Listening to you…';
-  };
+    recognition.onstart = () => {
+      // Handled in startVoiceRecording()
+    };
 
-  recognition.onresult = (e) => {
-    let transcript = '';
-    for (let i = e.resultIndex; i < e.results.length; ++i) {
-      transcript += e.results[i][0].transcript;
+    recognition.onresult = (e) => {
+      let transcript = '';
+      for (let i = e.resultIndex; i < e.results.length; ++i) {
+        transcript += e.results[i][0].transcript;
+      }
+      if (transcript.trim()) {
+        taskInput.value = transcript;
+      }
+    };
+
+    recognition.onerror = (err) => {
+      console.warn('SpeechRecognition warning:', err.error);
+      // Fail gracefully: MediaRecorder will still capture and send to Groq Whisper
+    };
+
+    recognition.onend = () => {
+      if (isListening) {
+        stopVoiceRecording();
+      }
+    };
+  } catch (e) {
+    console.warn('SpeechRecognition init note:', e);
+    recognition = null;
+  }
+}
+
+async function startVoiceRecording() {
+  if (isListening || isSubmitting) return;
+
+  try {
+    mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (micErr) {
+    console.warn('Microphone permission notice:', micErr);
+    statusText.textContent = '⚠️ Please allow microphone access to use voice commands.';
+    return;
+  }
+
+  isListening = true;
+  audioChunks = [];
+  micBtn.classList.add('active');
+
+  if (voiceRecordingPill) {
+    voiceRecordingPill.classList.add('active');
+    voiceRecordingText.textContent = currentLang === 'te-IN' 
+      ? 'Listening in Telugu (తెలుగు)… Speak now' 
+      : 'Listening to voice command… Speak now';
+  }
+
+  switchVideoState('listening');
+  statusText.textContent = currentLang === 'te-IN' ? 'Listening in Telugu (తెలుగు)…' : 'Listening to you…';
+
+  // Start MediaRecorder for high-fidelity Groq Whisper transcription
+  try {
+    const mime = MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : '';
+    mediaRecorder = mime ? new MediaRecorder(mediaStream, { mimeType: mime }) : new MediaRecorder(mediaStream);
+    mediaRecorder.ondataavailable = (e) => {
+      if (e.data && e.data.size > 0) audioChunks.push(e.data);
+    };
+    mediaRecorder.onstop = async () => {
+      stopMediaStream();
+      // If Web Speech API already provided text, submit directly
+      const currentVal = taskInput.value.trim();
+      if (currentVal) {
+        submitTask();
+      } else if (audioChunks.length > 0) {
+        statusText.textContent = 'Transcribing voice with Whisper…';
+        const audioBlob = new Blob(audioChunks, { type: mediaRecorder.mimeType || 'audio/webm' });
+        await transcribeWithWhisper(audioBlob);
+      } else {
+        switchVideoState('idle');
+        statusText.textContent = 'Ready';
+      }
+    };
+    mediaRecorder.start(250);
+  } catch (recErr) {
+    console.warn('MediaRecorder error:', recErr);
+  }
+
+  // Also trigger SpeechRecognition for live visual text preview if supported
+  if (recognition) {
+    try {
+      recognition.lang = currentLang;
+      recognition.start();
+    } catch (e) {
+      console.warn('Recognition start warning:', e);
     }
-    taskInput.value = transcript;
-  };
+  }
+}
 
-  recognition.onerror = () => {
-    isListening = false;
-    micBtn.classList.remove('active');
-    switchVideoState('idle');
-  };
+function stopMediaStream() {
+  if (mediaStream) {
+    mediaStream.getTracks().forEach(t => t.stop());
+    mediaStream = null;
+  }
+}
 
-  recognition.onend = () => {
-    isListening = false;
-    micBtn.classList.remove('active');
+function stopVoiceRecording() {
+  if (!isListening) return;
+  isListening = false;
+  micBtn.classList.remove('active');
+  if (voiceRecordingPill) voiceRecordingPill.classList.remove('active');
+
+  if (recognition) {
+    try { recognition.stop(); } catch (e) {}
+  }
+
+  if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+    mediaRecorder.stop();
+  } else {
+    stopMediaStream();
     if (taskInput.value.trim()) {
       submitTask();
     } else {
       switchVideoState('idle');
+      statusText.textContent = 'Ready';
     }
-  };
+  }
+}
+
+async function transcribeWithWhisper(audioBlob) {
+  try {
+    const formData = new FormData();
+    formData.append('file', audioBlob, 'voice_command.webm');
+    if (currentLang === 'te-IN') {
+      formData.append('language', 'te');
+    }
+
+    const res = await fetch('/api/voice/transcribe', {
+      method: 'POST',
+      body: formData
+    });
+    const data = await res.json();
+    if (data.success && data.text) {
+      taskInput.value = data.text;
+      submitTask();
+    } else {
+      switchVideoState('idle');
+      statusText.textContent = data.error || 'Could not hear voice command. Try again.';
+    }
+  } catch (e) {
+    console.warn('Whisper API call failed:', e);
+    switchVideoState('idle');
+    statusText.textContent = 'Ready';
+  }
 }
 
 micBtn.addEventListener('click', () => {
-  if (!recognition) {
-    alert('Speech recognition is supported in Chrome/Edge.');
-    return;
-  }
   if (isListening) {
-    recognition.stop();
+    stopVoiceRecording();
   } else {
     taskInput.value = '';
-    recognition.start();
+    startVoiceRecording();
   }
 });
 
