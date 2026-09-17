@@ -248,16 +248,28 @@
     object-fit:contain;
     object-position:bottom center;
     background:transparent;
-    transition:opacity 0.22s cubic-bezier(0.4, 0, 0.2, 1);
+    transition:opacity 0.32s cubic-bezier(0.25, 0.1, 0.25, 1.0);
     opacity:1;
     pointer-events:none;
-    /* Soft bottom ambient fade so torso blends right into the search bar */
-    mask-image: linear-gradient(to bottom, rgba(0,0,0,1) 80%, rgba(0,0,0,0) 100%);
-    -webkit-mask-image: linear-gradient(to bottom, rgba(0,0,0,1) 80%, rgba(0,0,0,0) 100%);
+    /* Soft bottom ambient fade so torso blends seamlessly into the search bar without hard cut */
+    mask-image: linear-gradient(to bottom, rgba(0,0,0,1) 82%, rgba(0,0,0,0.4) 94%, rgba(0,0,0,0) 100%);
+    -webkit-mask-image: linear-gradient(to bottom, rgba(0,0,0,1) 82%, rgba(0,0,0,0.4) 94%, rgba(0,0,0,0) 100%);
+  }
+
+  .avatar-video.avatar-idle{
+    z-index: 1;
+  }
+
+  .avatar-video.action-a{
+    z-index: 2;
+  }
+
+  .avatar-video.action-b{
+    z-index: 3;
   }
 
   .avatar-video.video-hidden{
-    opacity:0;
+    opacity:0 !important;
     pointer-events:none;
   }
 
@@ -630,9 +642,10 @@
     <!-- FRAMELESS FREE-STANDING VIDEO AVATAR (NO GHOSTING, PURE WHITE BLEND) -->
     <div class="model-wrapper" id="modelWrapper">
       <!-- BASE IDLE LAYER: 100% Closed Mouth Natural Presence from Normal_Waiting_DO____Keep_t -->
-      <video class="avatar-video" id="avatarVideoIdle" src="/assets/videos/idle.mp4" autoplay loop muted playsinline preload="auto"></video>
-      <!-- DYNAMIC ACTION LAYER: Real-time Audio-Reactive Lip Sync Overlay -->
-      <video class="avatar-video video-hidden" id="avatarVideoAction" src="/assets/videos/speaking_1.mp4" loop muted playsinline preload="auto"></video>
+      <video class="avatar-video avatar-idle" id="avatarVideoIdle" src="/assets/videos/idle.mp4" autoplay loop muted playsinline preload="auto"></video>
+      <!-- DYNAMIC ACTION DUAL-BUFFER: Seamless Ping-Pong Crossfade (No Black Screen / No Seams) -->
+      <video class="avatar-video action-a video-hidden" id="avatarVideoActionA" src="/assets/videos/speaking_5.mp4" loop muted playsinline preload="auto"></video>
+      <video class="avatar-video action-b video-hidden" id="avatarVideoActionB" src="/assets/videos/speaking_6.mp4" loop muted playsinline preload="auto"></video>
       <!-- PERSISTENT AUDIO ELEMENT: Rock-solid Web Audio graph connection without leaks -->
       <audio id="avatarAudio" preload="auto" playsinline crossorigin="anonymous" style="display:none;"></audio>
     </div>
@@ -712,7 +725,8 @@
 ========================================================================= */
 
 const avatarVideoIdle = document.getElementById('avatarVideoIdle');
-const avatarVideoAction = document.getElementById('avatarVideoAction');
+const avatarVideoActionA = document.getElementById('avatarVideoActionA');
+const avatarVideoActionB = document.getElementById('avatarVideoActionB');
 const avatarAudio = document.getElementById('avatarAudio');
 
 const appsBtn = document.getElementById('appsBtn');
@@ -732,22 +746,21 @@ let currentState = 'idle';
 let currentLang = 'en-IN'; // Default speech recognition language; toggleable to 'te-IN'
 let isSubmitting = false;
 
-// Dynamic clip library with 100% closed-mouth idle and non-repeating action pool
+// Curated verified clip library: 100% matched lighting, camera perspective & closed-mouth idle
 const DEFAULT_AVATAR_MANIFEST = {
   idle: [
     { id: 'idle_1', file: '/assets/videos/idle_1.mp4', duration: 10.0, style: 'calm_natural_waiting' },
     { id: 'idle_2', file: '/assets/videos/idle_2.mp4', duration: 5.0, style: 'attentive_poise' },
-    { id: 'idle_3', file: '/assets/videos/idle_3.mp4', duration: 5.5, style: 'natural_blink_breathing' }
+    { id: 'idle_3', file: '/assets/videos/idle_3.mp4', duration: 5.5, style: 'natural_blink_breathing' },
+    { id: 'idle_4', file: '/assets/videos/idle_4.mp4', duration: 5.0, style: 'gentle_awareness' },
+    { id: 'idle_5', file: '/assets/videos/idle_5.mp4', duration: 5.0, style: 'focused_listening' },
+    { id: 'idle_6', file: '/assets/videos/idle_6.mp4', duration: 5.5, style: 'relaxed_presence' }
   ],
   thinking: [
-    { id: 'thinking_1', file: '/assets/videos/thinking_1.mp4', duration: 2.0, style: 'attentive_listening_pause' },
-    { id: 'thinking_2', file: '/assets/videos/thinking_2.mp4', duration: 4.0, style: 'calm_processing' }
+    { id: 'thinking_2', file: '/assets/videos/thinking_2.mp4', duration: 4.0, style: 'calm_processing' },
+    { id: 'thinking_3', file: '/assets/videos/thinking_3.mp4', duration: 4.0, style: 'contemplative_ponder' }
   ],
   speaking: [
-    { id: 'speaking_1', file: '/assets/videos/speaking_1.mp4', duration: 3.4, tempo: 'fast', style: 'energetic_affirmation' },
-    { id: 'speaking_2', file: '/assets/videos/speaking_2.mp4', duration: 3.7, tempo: 'medium', style: 'articulate_statement' },
-    { id: 'speaking_3', file: '/assets/videos/speaking_3.mp4', duration: 4.1, tempo: 'medium', style: 'expressive_explanation' },
-    { id: 'speaking_4', file: '/assets/videos/speaking_4.mp4', duration: 5.3, tempo: 'expressive', style: 'concluding_remark' },
     { id: 'speaking_5', file: '/assets/videos/speaking_5.mp4', duration: 4.15, tempo: 'fast', style: 'rapid_response' },
     { id: 'speaking_6', file: '/assets/videos/speaking_6.mp4', duration: 5.0, tempo: 'medium', style: 'conversational_flow' },
     { id: 'speaking_7', file: '/assets/videos/speaking_7.mp4', duration: 5.0, tempo: 'expressive', style: 'animated_explanation' },
@@ -757,9 +770,12 @@ const DEFAULT_AVATAR_MANIFEST = {
 };
 
 class LayeredAvatarEngine {
-  constructor(idleEl, actionEl) {
+  constructor(idleEl, actionAEl, actionBEl) {
     this.idleVideo = idleEl;
-    this.actionVideo = actionEl;
+    this.actionVideoA = actionAEl;
+    this.actionVideoB = actionBEl;
+    this.activeBuffer = 'A'; // 'A' or 'B'
+    this.isTransitioning = false;
     this.state = 'idle';
     this.manifest = DEFAULT_AVATAR_MANIFEST;
     this.history = { thinking: [], speaking: [] };
@@ -767,7 +783,7 @@ class LayeredAvatarEngine {
     this.playbackRate = 1.0;
     this.isMouthActive = false;
 
-    // Load server manifest dynamically
+    // Dynamically query server manifest for guaranteed existence
     fetch('/api/avatar/manifest')
       .then(res => res.json())
       .then(data => {
@@ -777,21 +793,39 @@ class LayeredAvatarEngine {
       })
       .catch(() => {});
 
-    // Ensure idle video starts reliably
+    // Continuous baseline idle loop
     if (this.idleVideo) {
       this.idleVideo.play().catch(() => {});
     }
 
-    if (this.actionVideo) {
-      this.actionVideo.addEventListener('ended', () => {
-        if (this.state === 'speaking') {
-          // If speech is still ongoing, switch to another non-repeating clip seamlessly
-          this.playNextActionClip('speaking');
-        } else if (this.state === 'thinking') {
-          this.playNextActionClip('thinking');
+    const attachBufferListeners = (vid, bufName) => {
+      if (!vid) return;
+      // Fallback if clip ends before timeupdate anticipation
+      vid.addEventListener('ended', () => {
+        if (this.activeBuffer === bufName && !this.isTransitioning && this.state !== 'idle') {
+          this.playNextActionClip(this.state);
         }
       });
-    }
+      // Anticipate clip end by 350ms to crossfade before reaching final freeze-frame
+      vid.addEventListener('timeupdate', () => {
+        if (this.activeBuffer === bufName && !this.isTransitioning && this.state !== 'idle' && this.isMouthActive) {
+          if (vid.duration && vid.currentTime >= (vid.duration - 0.35)) {
+            this.playNextActionClip(this.state);
+          }
+        }
+      });
+    };
+
+    attachBufferListeners(this.actionVideoA, 'A');
+    attachBufferListeners(this.actionVideoB, 'B');
+  }
+
+  getActiveVideo() {
+    return this.activeBuffer === 'A' ? this.actionVideoA : this.actionVideoB;
+  }
+
+  getInactiveVideo() {
+    return this.activeBuffer === 'A' ? this.actionVideoB : this.actionVideoA;
   }
 
   pickNextClip(targetState, criteria = {}) {
@@ -805,8 +839,8 @@ class LayeredAvatarEngine {
     }
 
     const historyList = this.history[targetState] || [];
-    // Filter out the last 3 played clips to prevent repetitive loops
-    let pool = candidates.filter(c => !historyList.slice(-3).includes(c.id));
+    // Filter out the last 2 played clips to prevent immediate repeats
+    let pool = candidates.filter(c => !historyList.slice(-2).includes(c.id));
     if (pool.length === 0) pool = candidates;
 
     const chosen = pool[Math.floor(Math.random() * pool.length)];
@@ -818,51 +852,100 @@ class LayeredAvatarEngine {
 
   playNextActionClip(targetState, criteria = {}) {
     const clip = this.pickNextClip(targetState, criteria);
-    if (!clip || !this.actionVideo) return;
-    this.currentActionClip = clip;
-    this.actionVideo.src = clip.file;
-    this.actionVideo.playbackRate = this.playbackRate;
-    this.actionVideo.currentTime = 0;
-    this.actionVideo.play().catch(() => {});
+    if (!clip) return;
+
+    const currentVid = this.getActiveVideo();
+    const nextVid = this.getInactiveVideo();
+    if (!currentVid || !nextVid) return;
+
+    // Check if we are starting fresh from idle (both buffers hidden)
+    const isFirstStart = currentVid.classList.contains('video-hidden');
+
+    if (isFirstStart) {
+      currentVid.src = clip.file;
+      currentVid.playbackRate = this.playbackRate;
+      currentVid.currentTime = 0;
+      this.currentActionClip = clip;
+      currentVid.play().then(() => {
+        if (this.isMouthActive && this.state !== 'idle') {
+          currentVid.classList.remove('video-hidden');
+        }
+      }).catch(() => {});
+      return;
+    }
+
+    // Ping-pong double-buffer crossfade: zero black frames, zero freeze
+    this.isTransitioning = true;
+    nextVid.src = clip.file;
+    nextVid.playbackRate = this.playbackRate;
+    nextVid.currentTime = 0;
+    nextVid.classList.add('video-hidden');
+
+    const onReady = () => {
+      nextVid.removeEventListener('canplay', onReady);
+      nextVid.play().then(() => {
+        if (this.isMouthActive && this.state !== 'idle') {
+          nextVid.classList.remove('video-hidden');
+          currentVid.classList.add('video-hidden');
+        }
+        setTimeout(() => {
+          currentVid.pause();
+          this.isTransitioning = false;
+        }, 340);
+        this.activeBuffer = (this.activeBuffer === 'A') ? 'B' : 'A';
+        this.currentActionClip = clip;
+      }).catch(() => {
+        this.isTransitioning = false;
+      });
+    };
+
+    if (nextVid.readyState >= 3) {
+      onReady();
+    } else {
+      nextVid.addEventListener('canplay', onReady, { once: true });
+    }
   }
 
   setState(newState, criteria = {}) {
     this.state = newState;
     if (newState === 'idle') {
       this.setMouthVisible(false);
-      if (this.actionVideo) {
-        this.actionVideo.pause();
-      }
+      setTimeout(() => {
+        if (this.state === 'idle') {
+          if (this.actionVideoA) this.actionVideoA.pause();
+          if (this.actionVideoB) this.actionVideoB.pause();
+        }
+      }, 350);
     } else if (newState === 'thinking') {
-      this.playNextActionClip('thinking', criteria);
       this.setMouthVisible(true);
+      this.playNextActionClip('thinking', criteria);
     } else if (newState === 'speaking') {
-      this.playNextActionClip('speaking', criteria);
       if (criteria.immediate) {
         this.setMouthVisible(true);
       }
+      this.playNextActionClip('speaking', criteria);
     }
   }
 
   setMouthVisible(visible) {
-    if (!this.actionVideo) return;
     this.isMouthActive = visible;
     if (visible) {
-      this.actionVideo.classList.remove('video-hidden');
+      const active = this.getActiveVideo();
+      if (active) active.classList.remove('video-hidden');
     } else {
-      this.actionVideo.classList.add('video-hidden');
+      if (this.actionVideoA) this.actionVideoA.classList.add('video-hidden');
+      if (this.actionVideoB) this.actionVideoB.classList.add('video-hidden');
     }
   }
 
   setPlaybackRate(rate) {
     this.playbackRate = Math.min(Math.max(rate, 0.75), 1.35);
-    if (this.actionVideo) {
-      this.actionVideo.playbackRate = this.playbackRate;
-    }
+    if (this.actionVideoA) this.actionVideoA.playbackRate = this.playbackRate;
+    if (this.actionVideoB) this.actionVideoB.playbackRate = this.playbackRate;
   }
 }
 
-const avatarEngine = new LayeredAvatarEngine(avatarVideoIdle, avatarVideoAction);
+const avatarEngine = new LayeredAvatarEngine(avatarVideoIdle, avatarVideoActionA, avatarVideoActionB);
 
 const agentConfigs = {
   'main': {

@@ -635,12 +635,31 @@ async def get_avatar_manifest():
     """
     Returns available video clip libraries, durations, and tempo metadata
     for seamless, non-repeating shuffle and speech-synchronized lip movement.
+    Dynamically verifies that every referenced video file exists on disk.
     """
     manifest_path = assets_dir / "videos" / "video_manifest.json"
     if manifest_path.exists():
         try:
             with open(manifest_path, "r", encoding="utf-8") as f:
-                return {"success": True, "manifest": json.load(f)}
+                raw_manifest = json.load(f)
+
+            validated = {}
+            for state, clips in raw_manifest.items():
+                valid_clips = []
+                for clip in clips:
+                    file_str = clip.get("file", "")
+                    # Strip leading /assets/ or assets/
+                    rel_part = file_str
+                    if rel_part.startswith("/assets/"):
+                        rel_part = rel_part[len("/assets/"):]
+                    elif rel_part.startswith("assets/"):
+                        rel_part = rel_part[len("assets/"):]
+                    disk_path = assets_dir / rel_part
+                    if disk_path.exists() and disk_path.stat().st_size > 1000:
+                        valid_clips.append(clip)
+                validated[state] = valid_clips
+
+            return {"success": True, "manifest": validated}
         except Exception as e:
             return {"success": False, "error": str(e)}
     return {"success": False, "error": "Manifest not found"}
