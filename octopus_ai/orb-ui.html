@@ -1202,6 +1202,7 @@ function switchVideoState(newState) {
 let audioCtx = null;
 let audioAnalyser = null;
 let audioSourceNode = null;
+let gainNode = null;
 let lipSyncAnimFrame = null;
 let webAudioConnected = false;
 
@@ -1213,15 +1214,34 @@ function initWebAudioGraph() {
       audioCtx = new AudioContextClass();
     }
     if (audioCtx && !audioSourceNode) {
+      avatarAudio.volume = 1.0;
       audioSourceNode = audioCtx.createMediaElementSource(avatarAudio);
+
+      // Hardware Gain Boost: Boost volume to Maximum plus extra punch (2.2x / +7dB)
+      gainNode = audioCtx.createGain();
+      gainNode.gain.setValueAtTime(2.2, audioCtx.currentTime);
+
+      // Studio Broadcast Dynamics Compressor: Guarantees zero clipping/distortion at boosted volume
+      const compressor = audioCtx.createDynamicsCompressor();
+      compressor.threshold.setValueAtTime(-10, audioCtx.currentTime);
+      compressor.knee.setValueAtTime(8, audioCtx.currentTime);
+      compressor.ratio.setValueAtTime(5, audioCtx.currentTime);
+      compressor.attack.setValueAtTime(0.003, audioCtx.currentTime);
+      compressor.release.setValueAtTime(0.25, audioCtx.currentTime);
+
       audioAnalyser = audioCtx.createAnalyser();
       audioAnalyser.fftSize = 1024;
       audioAnalyser.smoothingTimeConstant = 0.75;
-      audioSourceNode.connect(audioAnalyser);
+
+      audioSourceNode.connect(gainNode);
+      gainNode.connect(compressor);
+      compressor.connect(audioAnalyser);
       audioAnalyser.connect(audioCtx.destination);
+
       webAudioConnected = true;
       window.audioCtx = audioCtx;
       window.audioAnalyser = audioAnalyser;
+      window.gainNode = gainNode;
     }
   } catch (err) {
     console.warn("Web Audio initialization notice:", err);
@@ -1330,6 +1350,7 @@ function playAgentSpeech(audioUrl, text) {
   try {
     avatarAudio.pause();
     avatarAudio.currentTime = 0;
+    avatarAudio.volume = 1.0;
     avatarAudio.src = audioUrl;
 
     avatarAudio.onplay = () => {

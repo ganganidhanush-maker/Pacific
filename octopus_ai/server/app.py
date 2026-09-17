@@ -409,14 +409,14 @@ async def generate_speech_file(text: str, voice: Optional[str] = None) -> Option
     except Exception as voice_err:
         print(f"⚠️ Neural voice clone fallback: {voice_err}")
 
-    # Fallback to Edge-TTS with target voice
+    # Fallback to Edge-TTS with target voice at maximum volume
     try:
-        text_hash = hashlib.md5(f"{target_voice}:{cleaned_text}".encode("utf-8")).hexdigest()
+        text_hash = hashlib.md5(f"maxvol_{target_voice}:{cleaned_text}".encode("utf-8")).hexdigest()
         filename = f"{text_hash}.mp3"
         filepath = AUDIO_CACHE_DIR / filename
 
         if not filepath.exists() or filepath.stat().st_size == 0:
-            communicate = edge_tts.Communicate(cleaned_text, voice=target_voice)
+            communicate = edge_tts.Communicate(cleaned_text, voice=target_voice, volume="+100%")
             await communicate.save(str(filepath))
 
         return f"/assets/audio_cache/{filename}"

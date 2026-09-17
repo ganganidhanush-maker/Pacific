@@ -126,8 +126,8 @@ class VoiceService:
             else:
                 target_voice = "en-IN-PrabhatNeural"
 
-        # Build unique cache key including target voice
-        cache_key = f"dhanush_voice_{target_voice}:{cleaned_text.lower()}"
+        # Build unique cache key including target voice and volume setting
+        cache_key = f"dhanush_voice_maxvol_{target_voice}:{cleaned_text.lower()}"
         text_hash = hashlib.md5(cache_key.encode("utf-8")).hexdigest()
         filename = f"{text_hash}.wav"
         filepath = AUDIO_CACHE_DIR / filename
@@ -146,6 +146,7 @@ class VoiceService:
             try:
                 import torch
                 import torchaudio as ta
+                import numpy as np
 
                 # Synthesize with Chatterbox
                 wav = self.model.generate(
@@ -156,21 +157,24 @@ class VoiceService:
                     repetition_penalty=1.2
                 )
 
-                # Save waveform using soundfile
+                # Save waveform using soundfile with maximum peak normalization
                 import soundfile as sf
                 audio_np = wav.squeeze().cpu().numpy()
+                max_val = np.max(np.abs(audio_np))
+                if max_val > 0:
+                    audio_np = (audio_np / max_val) * 0.98
                 sf.write(str(filepath), audio_np, self.model.sr)
                 return f"/assets/audio_cache/{filename}"
             except Exception as gen_err:
                 print(f"[VoiceService] Synthesis error ({gen_err}), falling back to Edge TTS...")
 
-        # Native Edge-TTS for Telugu, Hindi, Tamil, and high-quality voice synthesis
+        # Native Edge-TTS for Telugu, Hindi, Tamil, and high-quality voice synthesis at maximum volume
         try:
             import edge_tts
             fallback_filename = f"{text_hash}.mp3"
             fallback_path = AUDIO_CACHE_DIR / fallback_filename
             if not fallback_path.exists() or fallback_path.stat().st_size == 0:
-                communicate = edge_tts.Communicate(cleaned_text, voice=target_voice)
+                communicate = edge_tts.Communicate(cleaned_text, voice=target_voice, volume="+100%")
                 await communicate.save(str(fallback_path))
             return f"/assets/audio_cache/{fallback_filename}"
         except Exception as fb_err:
