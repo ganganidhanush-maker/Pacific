@@ -82,16 +82,16 @@ def run_desktop_app(host: str = None, port: int = None, reload: bool = True, ini
             env=server_env
         )
 
-        # Wait until port is open
-        for _ in range(60):
+        # Wait until port is open (allow up to 30 seconds for cold startup)
+        for _ in range(120):
             if server_process and server_process.poll() is not None:
-                raise RuntimeError(f"Server process exited prematurely with code {server_process.poll()}")
+                raise RuntimeError(f"Server process exited prematurely with code {server_process.poll()}. Check console logs above for details.")
             if is_port_in_use(port, host):
                 break
-            time.sleep(0.1)
+            time.sleep(0.25)
 
         if not is_port_in_use(port, host):
-            raise RuntimeError(f"Server port {port} on {host} failed to open within timeout")
+            raise RuntimeError(f"Server port {port} on {host} failed to open within 30s timeout. If port {port} is busy, try: python main.py --port 8080")
 
     display_host = "localhost" if host in ("0.0.0.0", "127.0.0.1") else host
     url = f"http://{display_host}:{port}"

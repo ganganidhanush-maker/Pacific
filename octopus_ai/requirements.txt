@@ -5,12 +5,15 @@ fastapi>=0.104.0
 uvicorn[standard]>=0.24.0
 pydantic>=2.5.0
 requests>=2.31.0
+httpx>=0.25.0
+python-multipart>=0.0.9
 python-dotenv>=1.0.0
 colorama>=0.4.6
 
 # Browser Automation & Chrome Engine
 selenium>=4.15.0
 webdriver-manager>=4.0.1
+playwright>=1.40.0
 
 # Speech Synthesis & Audio
 edge-tts>=6.1.9

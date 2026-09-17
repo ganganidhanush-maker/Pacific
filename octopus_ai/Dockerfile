@@ -55,13 +55,15 @@ WORKDIR /app
 
 # Copy requirements and install Python dependencies
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt \
+    && (python -m playwright install chromium || true)
 
 # Copy application source code
 COPY . .
 
 # Ensure data and cache directories exist with write permissions
-RUN mkdir -p /app/chrome-data /app/assets/audio_cache && chmod -R 777 /app/chrome-data /app/assets/audio_cache
+RUN mkdir -p /app/chrome-data /app/.chrome_profile /app/assets/audio_cache \
+    && chmod -R 777 /app/chrome-data /app/.chrome_profile /app/assets/audio_cache
 
 # Make entrypoint executable
 RUN chmod +x /app/entrypoint.sh

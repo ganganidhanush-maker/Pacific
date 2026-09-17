@@ -70,10 +70,13 @@ DEPENDENCY_MAP = {
     "uvicorn": "uvicorn[standard]>=0.24.0",
     "pydantic": "pydantic>=2.5.0",
     "requests": "requests>=2.31.0",
+    "python_multipart": "python-multipart>=0.0.9",
+    "httpx": "httpx>=0.25.0",
     "groq": "groq>=0.4.2",
     "edge_tts": "edge-tts>=6.1.9",
     "selenium": "selenium>=4.15.0",
     "webdriver_manager": "webdriver-manager>=4.0.1",
+    "playwright": "playwright>=1.40.0",
     "PIL": "pillow>=10.0.0",
     "psutil": "psutil>=5.9.0",
 }
