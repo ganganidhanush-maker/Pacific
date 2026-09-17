@@ -298,14 +298,14 @@ def classify_intent(user_msg: str, current_agent: str = "main") -> str:
         "task manager", "taskmgr", "command prompt", "powershell", "terminal",
         "file explorer", "explorer", "local file", "python assignment", "system info",
         "screenshot", "screen capture", "capture screen", "volume", "lock screen", "lock workstation",
-        "lock pc", "camera", "settings"
+        "lock pc", "camera", "settings", "pdf", "file", "files", "find all"
     ]
     if any(target in msg_lower for target in desktop_targets):
         return "desktop"
 
     # 4. Research triggers
     research_triggers = [
-        "presentation outline", "slide outline", "synthesize topic",
+        "research", "presentation outline", "slide outline", "synthesize topic",
         "academic research outline", "syllabus research", "research paper", "deep research"
     ]
     if any(k in msg_lower for k in research_triggers):
@@ -1122,10 +1122,39 @@ async def chat_endpoint(req: ChatRequest, background_tasks: BackgroundTasks):
 # =============================================================================
 # STUDIO VIDEO AVATAR CONFIGURATION
 # =============================================================================
+CURRENT_AVATAR_MODE = "video"
+
 @app.get("/api/avatar/mode")
 async def get_avatar_mode():
-    """Return avatar mode (Studio Video)."""
-    return {"mode": "video", "available_modes": ["video"]}
+    """Return avatar mode."""
+    return {"mode": CURRENT_AVATAR_MODE, "available_modes": ["3d_vrm", "video"]}
+
+@app.post("/api/avatar/mode")
+async def set_avatar_mode(request: Request):
+    global CURRENT_AVATAR_MODE
+    data = await request.json()
+    mode = data.get("mode")
+    if mode not in ["3d_vrm", "video"]:
+        raise HTTPException(status_code=400, detail="Invalid mode")
+    CURRENT_AVATAR_MODE = mode
+    return {"success": True, "mode": mode}
+
+@app.get("/api/avatar/motion-profile")
+async def get_avatar_motion_profile():
+    return {
+        "physics_and_procedural": {"blink": True, "breathing": True},
+        "audio_viseme_mapping": {"aa": "mouthOpen", "ee": "mouthSmile"}
+    }
+
+@app.get("/api/avatar/models")
+async def get_avatar_models():
+    return {"models": ["default.vrm"]}
+
+@app.post("/api/avatar/upload-vrm")
+async def upload_vrm(file: UploadFile = File(...)):
+    if not file.filename.endswith(".vrm"):
+        raise HTTPException(status_code=400, detail="Only .vrm files are supported")
+    return {"success": True, "filename": file.filename}
 
 
 
