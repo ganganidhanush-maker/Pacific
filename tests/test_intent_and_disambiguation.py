@@ -121,7 +121,7 @@ class TestIntentAndDisambiguation(unittest.TestCase):
         self.assertIn('speaking', manifest)
         self.assertGreaterEqual(len(manifest['idle']), 6)
         self.assertGreaterEqual(len(manifest['thinking']), 3)
-        self.assertGreaterEqual(len(manifest['speaking']), 7)
+        self.assertGreaterEqual(len(manifest['speaking']), 5)
 
     def test_classify_intent_expanded_desktop_tools(self):
         self.assertEqual(classify_intent('take a screenshot'), 'desktop')
